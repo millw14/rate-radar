@@ -8,6 +8,9 @@
   "functions": {
     "api/index.mjs": { "maxDuration": 120 }
   },
+  "crons": [
+    { "path": "/api/cron/reconcile", "schedule": "* * * * *" }
+  ],
   "rewrites": [
     { "source": "/api/:rrRoute*", "destination": "/api/index" }
   ],

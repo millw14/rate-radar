@@ -4,7 +4,8 @@ import { SHIELDED_POOL_PROGRAM_ID, InstructionTag, DEFAULT_TREE_ID } from '@heli
 import { resolveRegisteredAddress } from '@heliuslabs/spr/wallet';
 import { Utxo, SOL_ASSET_ID, decodeOutputData, decodeConfidential, EncryptedScheme } from '@heliuslabs/spr/transaction';
 import { Reader, treeAddress, splAssetRegistryAddress, decodeSplAssetRegistryAccount } from '@heliuslabs/spr/internal';
-import { RINGS_NETWORK, SOL_MINT, DEVNET_GENESIS_HASH, amountAtomic, paymentMemo, equalBytes, fromBase64 } from './rings-protocol.mjs';
+import { SOL_MINT, amountAtomic, paymentMemo, equalBytes, fromBase64 } from './rings-protocol.mjs';
+import { getNetworkConfig } from './rings-networks.mjs';
 
 class InvalidEvidence extends Error {}
 const refuse = (message) => { throw new InvalidEvidence(message); };
@@ -96,7 +97,7 @@ export function decodeFinalizedPayment(transaction, intent, outputIndex) {
 
 function rpcFactory(env, fetchImpl) {
   if (!env.HELIUS_API_KEY) throw new Error('Rings RPC is not configured.');
-  const url = new URL('https://devnet.helius-rpc.com/');
+  const url = new URL(getNetworkConfig(env.RINGS_NETWORK || 'devnet').rpcUrl);
   url.searchParams.set('api-key', env.HELIUS_API_KEY);
   return async (method, params = []) => {
     const response = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: AbortSignal.timeout(20_000) });
@@ -112,7 +113,11 @@ export async function verifyRingsPayment(input, env, { fetchImpl = globalThis.fe
   let txKey;
   try {
     const { intent, txSignature, outputIndex, eventIndex = 0, transactionViewingKey } = input ?? {};
-    if (input?.network !== RINGS_NETWORK || (env.RINGS_NETWORK && env.RINGS_NETWORK !== RINGS_NETWORK)) refuse('Only Solana devnet payments are supported.');
+    let network;
+    try { network = getNetworkConfig(env.RINGS_NETWORK || 'devnet'); } catch { throw new Error('Unsupported verifier network configuration'); }
+    if (input?.network !== network.network || intent?.network !== network.network) refuse('The payment network does not match this workspace.');
+    if (env.RINGS_USDC_MINT && env.RINGS_USDC_MINT !== network.usdcMint) throw new Error('Configured USDC does not match this network');
+    if (network.network === 'mainnet-beta' && intent.mint !== network.usdcMint) refuse('Mainnet receipts require canonical USDC.');
     let memo;
     try { memo = paymentMemo(intent); } catch { refuse('Invalid payment intent.'); }
     if (!isSignature(txSignature) || !Number.isInteger(outputIndex) || outputIndex < 0 || outputIndex > 15 || eventIndex !== 0) refuse('Invalid transaction disclosure.');
@@ -125,7 +130,7 @@ export async function verifyRingsPayment(input, env, { fetchImpl = globalThis.fe
     } catch { refuse('Invalid transaction viewing key.'); }
     finally { keyBytes?.fill(0); }
     const rpc = rpcFactory(env, fetchImpl);
-    if (await rpc('getGenesisHash') !== DEVNET_GENESIS_HASH) refuse('The RPC endpoint is not Solana devnet.');
+    if (await rpc('getGenesisHash') !== network.genesisHash) throw new Error('RPC cluster mismatch');
     // commitment=finalized is the source of finality. A merely confirmed
     // transaction cannot create a paid receipt, even if the client says it did.
     const chain = await rpc('getTransaction', [txSignature, { commitment: 'finalized', encoding: 'json', maxSupportedTransactionVersion: 1 }]);
@@ -172,7 +177,7 @@ export async function verifyRingsPayment(input, env, { fetchImpl = globalThis.fe
     return {
       status: 'verified',
       evidence: {
-        network: RINGS_NETWORK, txSignature, eventIndex: 0, instructionIndex: decoded.instructionIndex, outputIndex,
+        network: network.network, txSignature, eventIndex: 0, instructionIndex: decoded.instructionIndex, outputIndex,
         outputCommitment: Array.from(decoded.output.hash, (byte) => byte.toString(16).padStart(2, '0')).join(''),
         slot: String(decoded.slot), blockTime: decoded.blockTime, finality: 'finalized', finalized: true,
         mint: intent.mint, amountAtomic: intent.amountAtomic, payerWallet: intent.payerWallet, recipientWallet: intent.recipientWallet,

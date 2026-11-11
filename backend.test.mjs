@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { getCompiledTransactionMessageEncoder, getTransactionEncoder } from '@solana/kit';
+import { getCompiledTransactionMessageDecoder, getTransactionDecoder, getTransactionEncoder } from '@solana/kit';
 import { SHIELDED_POOL_PROGRAM_ID } from '@heliuslabs/spr/interface';
+import { compileUnsignedTransaction } from '@heliuslabs/spr/internal';
 import { DATABASE_SCHEMA_SQL, checkPaymentExpiry, encodeBase58, handleApi, parseAmount, reconcilePendingPayments, validateSignedPayment } from './backend.mjs';
 import { DEVNET_GENESIS_HASH } from './rings-protocol.mjs';
+import { getNetworkConfig } from './rings-networks.mjs';
+import { handleCronRequest } from './api/index.mjs';
 
 const ORIGIN = 'https://rate-radar.test';
 const b64 = (bytes) => Buffer.from(bytes).toString('base64');
@@ -71,8 +74,8 @@ async function fixture(t, overrides = {}) {
     assert.equal(challenge.status, 200, JSON.stringify(challenge.body));
     return api(`/api/deals/${deal.id}/approve`, { method: 'POST', body: { challengeId: challenge.body.challengeId, signature: await user.sign(challenge.body.message) }, user });
   };
-  const readyDeal = async () => {
-    const deal = await draft();
+  const readyDeal = async (extra = {}) => {
+    const deal = await draft(extra);
     const one = await approve(deal, brand);
     assert.equal(one.body.deal.status, 'awaiting_approval');
     const both = await approve(deal, creator);
@@ -88,7 +91,7 @@ async function fixture(t, overrides = {}) {
 }
 
 async function disclosure(payer) {
-  const messageBytes = getCompiledTransactionMessageEncoder().encode({ version: 0, header: { numSignerAccounts: 1, numReadonlySignerAccounts: 0, numReadonlyNonSignerAccounts: 1 }, staticAccounts: [payer.wallet, SHIELDED_POOL_PROGRAM_ID], lifetimeToken: encodeBase58(crypto.getRandomValues(new Uint8Array(32))), instructions: [{ programAddressIndex: 1, accountIndices: [0], data: new Uint8Array([0]) }] });
+  const { messageBytes } = compileUnsignedTransaction({ feePayer: payer.wallet, lifetime: { blockhash: encodeBase58(crypto.getRandomValues(new Uint8Array(32))), lastValidBlockHeight: 1000n }, instructions: [{ programAddress: SHIELDED_POOL_PROGRAM_ID, accounts: [{ address: payer.wallet, role: 3 }], data: new Uint8Array([0]) }], computeUnitLimit: 450000 });
   const signature = await payer.signBytes(messageBytes);
   const wire = getTransactionEncoder().encode({ messageBytes, signatures: { [payer.wallet]: signature } });
   return { signedTransaction: b64(wire), txSignature: encodeBase58(signature), transactionViewingKey: b64(crypto.getRandomValues(new Uint8Array(32))), eventIndex: 0, outputIndex: 1 };
@@ -274,6 +277,10 @@ test('RPC proxy rejects arbitrary destinations and unapproved methods before net
 test('signed payment validation rejects altered bytes, wrong signatures, and another payer', async (t) => {
   const f = await fixture(t);
   const proof = await disclosure(f.brand);
+  const message = getCompiledTransactionMessageDecoder().decode(getTransactionDecoder().decode(Buffer.from(proof.signedTransaction, 'base64')).messageBytes);
+  assert.equal(message.version, 1);
+  assert.equal(message.instructions, undefined);
+  assert.equal(message.instructionHeaders.length, 1);
   assert.equal(await validateSignedPayment(proof.signedTransaction, proof.txSignature, f.brand.wallet), proof.signedTransaction);
   await assert.rejects(validateSignedPayment(proof.signedTransaction, proof.txSignature, f.creator.wallet));
   await assert.rejects(validateSignedPayment(proof.signedTransaction, encodeBase58(crypto.getRandomValues(new Uint8Array(64))), f.brand.wallet));
@@ -423,7 +430,7 @@ test('expired absent payments require review, retaining their immutable signatur
   assert.equal((await f.api('/api/receipts')).body.receipts.length, 0);
 });
 
-test('unsupported payment networks disable configuration, new intents, submission, and saved relays', async (t) => {
+test('cross-network asset configuration rejects new payments and cannot relay an existing checkpoint', async (t) => {
   const f = await fixture(t);
   const deal = await f.readyDeal();
   const intent = await f.intent(deal);
@@ -432,12 +439,93 @@ test('unsupported payment networks disable configuration, new intents, submissio
   f.env.RINGS_NETWORK = 'mainnet-beta';
   let relays = 0;
   f.setBroadcaster(async () => { relays++; });
-  const config = (await f.api('/api/config')).body;
-  assert.equal(config.paymentsEnabled, false);
-  assert.equal(config.rpcEnabled, false);
-  assert(config.missingConfiguration.some((entry) => entry.includes('devnet')));
+  const config = await f.api('/api/config');
+  assert.equal(config.status, 503);
+  assert.equal(config.body.error.code, 'INVALID_ASSET_CONFIGURATION');
   assert.equal((await f.api(`/api/deals/${deal.id}/payment-intents`, { method: 'POST', body: {}, headers: { 'Idempotency-Key': crypto.randomUUID() } })).status, 503);
   assert.equal((await f.api(`/api/payment-intents/${intent.id}/submit`, { method: 'POST', body: proof })).status, 503);
   assert.equal((await f.api(`/api/payment-intents/${intent.id}`)).body.intent.status, 'pending');
   assert.equal(relays, 0);
+});
+
+test('mainnet uses canonical USDC and a conservative configurable exact payment cap', async (t) => {
+  const chain = getNetworkConfig('mainnet-beta');
+  const f = await fixture(t, { RINGS_NETWORK: chain.network, RINGS_USDC_MINT: chain.usdcMint });
+  const config = (await f.api('/api/config')).body;
+  assert.equal(config.network, 'mainnet-beta');
+  assert.equal(config.paymentLimitUsdc, '100');
+  assert.equal(config.paymentsEnabled, true);
+  const above = await f.readyDeal({ amount: '100.000001' });
+  const refused = await f.api(`/api/deals/${above.id}/payment-intents`, { method: 'POST', body: {}, headers: { 'Idempotency-Key': crypto.randomUUID() } });
+  assert.equal(refused.body.error.code, 'PAYMENT_LIMIT_EXCEEDED');
+  const small = await f.readyDeal({ amount: '100' });
+  const intent = await f.intent(small);
+  assert.equal(intent.network, chain.network);
+  assert.equal(intent.mint, chain.usdcMint);
+  f.env.PAYMENT_LIMIT_USDC = '99.999999';
+  const proof = await disclosure(f.brand);
+  assert.equal((await f.api(`/api/payment-intents/${intent.id}/submit`, { method: 'POST', body: proof })).body.error.code, 'PAYMENT_LIMIT_EXCEEDED');
+  assert.equal(f.DB.sqlite.prepare('SELECT status FROM payment_intents WHERE id=?').get(intent.id).status, 'created');
+  f.env.PAYMENT_LIMIT_USDC = '100';
+  f.setVerifier(async (input) => verified(input));
+  const result = await f.api(`/api/payment-intents/${intent.id}/submit`, { method: 'POST', body: proof });
+  assert.equal(result.body.receipt.network, 'mainnet-beta');
+  assert.equal(result.body.receipt.mint, chain.usdcMint);
+});
+
+test('payment pause blocks new checkpoints but preserves existing settlement and wallet RPC access', async (t) => {
+  const f = await fixture(t);
+  const active = await f.readyDeal();
+  const activeIntent = await f.intent(active);
+  const proof = await disclosure(f.brand);
+  await f.api(`/api/payment-intents/${activeIntent.id}/submit`, { method: 'POST', body: proof });
+  const waiting = await f.readyDeal();
+  const waitingIntent = await f.intent(waiting);
+  f.env.PAYMENTS_PAUSED = 'true';
+  const config = (await f.api('/api/config')).body;
+  assert.equal(config.paymentsEnabled, false);
+  assert.equal(config.paymentsPaused, true);
+  assert.equal(config.walletOperationsEnabled, true);
+  assert.equal(config.rpcEnabled, true);
+  assert.equal((await f.api(`/api/payment-intents/${waitingIntent.id}/submit`, { method: 'POST', body: await disclosure(f.brand) })).body.error.code, 'PAYMENTS_PAUSED');
+  const newDeal = await f.readyDeal();
+  assert.equal((await f.api(`/api/deals/${newDeal.id}/payment-intents`, { method: 'POST', body: {}, headers: { 'Idempotency-Key': crypto.randomUUID() } })).body.error.code, 'PAYMENTS_PAUSED');
+  f.setVerifier(async (input) => verified(input));
+  assert.equal((await f.api(`/api/payment-intents/${activeIntent.id}/submit`, { method: 'POST', body: { txSignature: proof.txSignature } })).body.intent.status, 'verified');
+});
+
+test('cron requires server bearer authentication and a durable lease, and reconciles while payments are paused', async (t) => {
+  const f = await fixture(t, { CRON_SECRET: 's'.repeat(64) });
+  const deal = await f.readyDeal();
+  const intent = await f.intent(deal);
+  await f.api(`/api/payment-intents/${intent.id}/submit`, { method: 'POST', body: await disclosure(f.brand) });
+  f.env.PAYMENTS_PAUSED = 'true';
+  const request = (authorization, method = 'GET') => new Request(`${ORIGIN}/api/cron/reconcile`, { method, headers: authorization ? { Authorization: authorization } : {} });
+  let verifiedCalls = 0;
+  const dependencies = { broadcastPayment: async () => {}, verifyPayment: async (input) => { verifiedCalls++; return verified(input); } };
+  assert.equal((await handleCronRequest(request(), f.env, dependencies)).status, 401);
+  assert.equal((await handleCronRequest(request('Bearer wrong'), f.env, dependencies)).status, 401);
+  assert.equal((await handleCronRequest(request(`Bearer ${f.env.CRON_SECRET}`, 'POST'), f.env, dependencies)).status, 405);
+  assert.equal(verifiedCalls, 0);
+  f.DB.sqlite.prepare('INSERT INTO rate_limits(bucket,count,expires_at) VALUES(?,?,?)').run('reconciliation-lease:devnet', 12, Date.now() + 150000);
+  const skipped = await handleCronRequest(request(`Bearer ${f.env.CRON_SECRET}`), f.env, dependencies);
+  assert.equal((await skipped.json()).skipped, 'already_running');
+  assert.equal(verifiedCalls, 0);
+  f.DB.sqlite.prepare('DELETE FROM rate_limits WHERE bucket=?').run('reconciliation-lease:devnet');
+  const result = await handleCronRequest(request(`Bearer ${f.env.CRON_SECRET}`), f.env, dependencies);
+  assert.deepEqual(await result.json(), { checked: 1, verified: 1, failed: 0, pending: 0, errors: 0 });
+  assert.equal((await f.api(`/api/deals/${deal.id}`)).body.deal.status, 'paid');
+  assert.equal(f.DB.sqlite.prepare('SELECT * FROM rate_limits WHERE bucket=?').get('reconciliation-lease:devnet'), undefined);
+});
+
+test('scheduled reconciliation never selects a pending payment from another cluster', async (t) => {
+  const f = await fixture(t);
+  const deal = await f.readyDeal();
+  const intent = await f.intent(deal);
+  await f.api(`/api/payment-intents/${intent.id}/submit`, { method: 'POST', body: await disclosure(f.brand) });
+  f.env.RINGS_NETWORK = 'mainnet-beta';
+  f.env.RINGS_USDC_MINT = getNetworkConfig('mainnet-beta').usdcMint;
+  const result = await reconcilePendingPayments(f.env, { verifyPayment: async () => assert.fail('Cross-cluster verifier must never run'), broadcastPayment: async () => assert.fail('Cross-cluster relay must never run') });
+  assert.equal(result.checked, 0);
+  assert.equal(f.DB.sqlite.prepare('SELECT status FROM payment_intents WHERE id=?').get(intent.id).status, 'pending');
 });

@@ -6,3 +6,4 @@ coverage
 dist
 *.test.mjs
 server/*.test.mjs
+backups

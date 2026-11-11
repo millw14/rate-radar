@@ -1,14 +1,14 @@
 /** Same-origin Sites API. The hosting dispatcher, not browser input, supplies identity. */
 import { getCompiledTransactionMessageDecoder, getSignatureFromTransaction, getTransactionDecoder, getTransactionEncoder } from '@solana/kit';
 import { SHIELDED_POOL_PROGRAM_ID } from '@heliuslabs/spr/interface';
-import { DEVNET_GENESIS_HASH } from './rings-protocol.mjs';
+import { getNetworkConfig } from './rings-networks.mjs';
 const IDENTITY_HEADER = 'oai-authenticated-user-id';
 const CHALLENGE_TTL = 5 * 60 * 1000;
 const PAYMENT_EXPIRY_GRACE = 5 * 60 * 1000;
 const PAYMENT_REVIEW_REASON = 'Needs review: the signed transaction is no longer valid and no finalized payment was located. This agreement cannot send a replacement payment. Review the transaction and confirm the outcome with your counterparty before creating a new agreement.';
 const MAX_BODY = 32 * 1024;
 const BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-const RPC_METHODS = new Set(['getAccountInfo', 'getProgramAccounts', 'getMultipleAccounts', 'getBalance', 'getLatestBlockhash', 'getSignatureStatuses', 'getTransaction', 'getSlot', 'getBlockHeight', 'sendTransaction', 'getGenesisHash', 'simulateTransaction', 'getMinimumBalanceForRentExemption', 'getTokenAccountBalance']);
+const RPC_METHODS = new Set(['getAccountInfo', 'getProgramAccounts', 'getMultipleAccounts', 'getBalance', 'getLatestBlockhash', 'getSignatureStatuses', 'getTransaction', 'getSlot', 'getBlockHeight', 'isBlockhashValid', 'sendTransaction', 'getGenesisHash', 'simulateTransaction', 'getMinimumBalanceForRentExemption', 'getTokenAccountBalance']);
 const INDEXER_METHODS = new Set(['getEncryptedUtxosByTags', 'getShieldedTransactionsByTags', 'getShieldedTransactionsByNullifiers', 'getShieldedTransactionsBySignature', 'getUserRecords', 'getMerkleProofs', 'getNonInclusionProofs']);
 
 export const DATABASE_SCHEMA_SQL = `
@@ -100,16 +100,30 @@ function boundedText(value, name, max, optional = false) {
   return value.trim();
 }
 function networkConfig(env) {
-  const network = env.RINGS_NETWORK || 'devnet';
-  if (!['devnet', 'mainnet-beta'].includes(network)) fail(503, 'INVALID_NETWORK_CONFIGURATION', 'The payment network has not been configured correctly.');
+  let chain;
+  try { chain = getNetworkConfig(env.RINGS_NETWORK || 'devnet'); }
+  catch { fail(503, 'INVALID_NETWORK_CONFIGURATION', 'The payment network has not been configured correctly.'); }
   let mint = null;
   if (env.RINGS_USDC_MINT) {
     try { mint = walletAddress(env.RINGS_USDC_MINT); } catch { fail(503, 'INVALID_ASSET_CONFIGURATION', 'The payment asset has not been configured correctly.'); }
+    if (mint !== chain.usdcMint) fail(503, 'INVALID_ASSET_CONFIGURATION', 'The USDC mint does not match the configured payment network.');
   }
-  return { network, mint, symbol: 'USDC', decimals: 6 };
+  return { network: chain.network, mint, symbol: 'USDC', decimals: 6 };
 }
 function missingPayments(env) {
-  return [...['HELIUS_API_KEY', 'RINGS_USDC_MINT', 'RECEIPT_ENCRYPTION_KEY'].filter((key) => !env[key]), ...((env.RINGS_NETWORK || 'devnet') !== 'devnet' ? ['RINGS_NETWORK must be devnet for this release'] : [])];
+  return ['HELIUS_API_KEY', 'RINGS_USDC_MINT', 'RECEIPT_ENCRYPTION_KEY'].filter((key) => !env[key]);
+}
+function paymentControls(env) {
+  if (env.PAYMENTS_PAUSED && !['true', 'false'].includes(env.PAYMENTS_PAUSED)) fail(503, 'INVALID_PAYMENT_CONTROLS', 'The payment pause setting is invalid.');
+  const limit = env.PAYMENT_LIMIT_USDC || ((env.RINGS_NETWORK || 'devnet') === 'mainnet-beta' ? '100' : '10000000');
+  let atomic;
+  try { atomic = parseAmount(limit); } catch { fail(503, 'INVALID_PAYMENT_CONTROLS', 'The payment limit must be a positive USDC amount.'); }
+  return { paymentsPaused: env.PAYMENTS_PAUSED === 'true', paymentLimitUsdc: displayAmount(atomic), paymentLimitAtomic: atomic };
+}
+function requireNewPayment(env, amount) {
+  const controls = paymentControls(env);
+  if (controls.paymentsPaused) fail(503, 'PAYMENTS_PAUSED', 'New payments are paused. Existing payments are still being checked.');
+  if (BigInt(amount) > BigInt(controls.paymentLimitAtomic)) fail(400, 'PAYMENT_LIMIT_EXCEEDED', `This payment exceeds the workspace limit of ${controls.paymentLimitUsdc} USDC.`);
 }
 function normalizeTerms(body, env, previous) {
   const chain = previous ? { network: previous.network, mint: previous.mint || networkConfig(env).mint } : networkConfig(env);
@@ -240,7 +254,13 @@ export async function validateSignedPayment(signedTransaction, signature, payerW
     if (getSignatureFromTransaction(decoded) !== signature || Object.keys(decoded.signatures)[0] !== payerWallet) throw new Error('Wrong payer or signature');
     const compiled = getCompiledTransactionMessageDecoder().decode(decoded.messageBytes);
     if (compiled.staticAccounts[0] !== payerWallet || compiled.addressTableLookups?.length) throw new Error('Unsupported payment accounts');
-    const programs = compiled.instructions.map((instruction) => compiled.staticAccounts[instruction.programAddressIndex]);
+    // Kit exposes version 1 instruction headers separately from their payloads;
+    // the SDK's real payment builder emits this shape, not the legacy/v0 array.
+    const programs = compiled.version === 1
+      ? compiled.instructionHeaders.map((instruction) => compiled.staticAccounts[instruction.programAccountIndex])
+      : compiled.version === 0
+        ? compiled.instructions.map((instruction) => compiled.staticAccounts[instruction.programAddressIndex])
+        : [];
     if (programs.filter((program) => program === SHIELDED_POOL_PROGRAM_ID).length !== 1 || programs.some((program) => ![SHIELDED_POOL_PROGRAM_ID, 'ComputeBudget111111111111111111111111111111'].includes(program))) throw new Error('Unsupported payment instructions');
     for (const [wallet, bytes] of Object.entries(decoded.signatures)) {
       if (!bytes || !(await verifyWalletBytes(wallet, decoded.messageBytes, bytes))) throw new Error('Invalid transaction signature');
@@ -255,13 +275,13 @@ async function verifyWalletBytes(wallet, message, signature) {
   } catch { return false; }
 }
 async function relaySavedTransaction(env, payload, signature, dependencies) {
-  if (!payload.signedTransaction || networkConfig(env).network !== 'devnet' || !env.HELIUS_API_KEY) return;
+  if (!payload.signedTransaction || !env.HELIUS_API_KEY) return;
   try {
     if (dependencies?.broadcastPayment) {
       await dependencies.broadcastPayment({ signedTransaction: payload.signedTransaction, txSignature: signature });
       return;
     }
-    const target = new URL('https://devnet.helius-rpc.com/');
+    const target = new URL(getNetworkConfig(networkConfig(env).network).rpcUrl);
     target.searchParams.set('api-key', env.HELIUS_API_KEY);
     // A retry always resends the stored signed bytes. It can never create a new signature/payment.
     await fetch(target, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'sendTransaction', params: [payload.signedTransaction, { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3 }] }), signal: AbortSignal.timeout(8000) });
@@ -269,7 +289,7 @@ async function relaySavedTransaction(env, payload, signature, dependencies) {
 }
 async function expiryRpc(env, method, params, dependencies) {
   if (dependencies?.expiryRpc) return dependencies.expiryRpc(method, params);
-  const target = new URL('https://devnet.helius-rpc.com/');
+  const target = new URL(getNetworkConfig(networkConfig(env).network).rpcUrl);
   target.searchParams.set('api-key', env.HELIUS_API_KEY);
   const id = uid();
   const response = await fetch(target, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }), signal: AbortSignal.timeout(8000) });
@@ -282,7 +302,7 @@ async function expiryRpc(env, method, params, dependencies) {
 // locked for review, with its signed wire and disclosure retained for manual recovery.
 export async function checkPaymentExpiry({ payload, txSignature, network }, env, dependencies = {}) {
   const checkpoint = typeof payload?.checkpointAt === 'string' ? Date.parse(payload.checkpointAt) : NaN;
-  if (network !== 'devnet' || networkConfig(env).network !== 'devnet' || !env.HELIUS_API_KEY || !Number.isFinite(checkpoint) || Date.now() - checkpoint < PAYMENT_EXPIRY_GRACE || !payload.signedTransaction) return false;
+  if (network !== networkConfig(env).network || !env.HELIUS_API_KEY || !Number.isFinite(checkpoint) || Date.now() - checkpoint < PAYMENT_EXPIRY_GRACE || !payload.signedTransaction) return false;
   const slotAtLeast = (value, floor) => Number.isSafeInteger(value) && value >= floor;
   try {
     const transaction = getTransactionDecoder().decode(unbase64(payload.signedTransaction));
@@ -291,7 +311,7 @@ export async function checkPaymentExpiry({ payload, txSignature, network }, env,
     if (typeof blockhash !== 'string' || decodeBase58(blockhash).length !== 32) return false;
     const rpc = (method, params = []) => expiryRpc(env, method, params, dependencies);
     const [genesis, floor] = await Promise.all([rpc('getGenesisHash'), rpc('getSlot', [{ commitment: 'finalized' }])]);
-    if (genesis !== DEVNET_GENESIS_HASH || !slotAtLeast(floor, 0)) return false;
+    if (genesis !== getNetworkConfig(network).genesisHash || !slotAtLeast(floor, 0)) return false;
     const finalized = await rpc('isBlockhashValid', [blockhash, { commitment: 'finalized', minContextSlot: floor }]);
     if (finalized?.value !== false || !slotAtLeast(finalized?.context?.slot, floor)) return false;
     // During a finality stall a fresh confirmed hash may be absent from the finalized
@@ -309,7 +329,7 @@ async function reconcile(env, row, dependencies) {
   const intent = JSON.parse(row.snapshot_json);
   let result;
   try {
-    if (intent.network !== 'devnet' || networkConfig(env).network !== 'devnet') throw new Error('Unsupported payment network');
+    if (intent.network !== networkConfig(env).network || intent.mint !== networkConfig(env).mint) throw new Error('Payment network or asset does not match this workspace');
     const saved = await decryptDisclosure(env, row.disclosure_ciphertext, row.id);
     const payload = saved.startsWith('{') ? JSON.parse(saved) : { transactionViewingKey: saved };
     await relaySavedTransaction(env, payload, row.tx_signature, dependencies);
@@ -361,11 +381,17 @@ async function paymentResponse(env, row) {
 
 export async function reconcilePendingPayments(env, dependencies) {
   if (!env.DB || missingPayments(env).length) return { checked: 0 };
-  const rows = await all(env.DB, "SELECT * FROM payment_intents WHERE status='pending' ORDER BY updated_at ASC LIMIT 5");
-  for (const row of rows) await reconcile(env, row, dependencies);
+  const chain = networkConfig(env);
+  const limit = Number.isInteger(dependencies?.limit) ? Math.max(1, Math.min(5, dependencies.limit)) : 5;
+  const rows = await all(env.DB, "SELECT * FROM payment_intents WHERE status='pending' AND json_extract(snapshot_json,'$.network')=? AND json_extract(snapshot_json,'$.mint')=? ORDER BY updated_at ASC LIMIT ?", chain.network, chain.mint, limit);
+  const outcomes = { checked: rows.length, verified: 0, failed: 0, pending: 0, errors: 0 };
+  for (const row of rows) {
+    try { const result = await reconcile(env, row, dependencies); if (Object.hasOwn(outcomes, result.status)) outcomes[result.status]++; }
+    catch { outcomes.errors++; }
+  }
   await run(env.DB, 'DELETE FROM rate_limits WHERE expires_at<?', Date.now() - 86400000);
   await run(env.DB, 'DELETE FROM challenges WHERE expires_at<?', Date.now() - 86400000);
-  return { checked: rows.length };
+  return outcomes;
 }
 
 async function rpcProxy(request, env, identity) {
@@ -376,8 +402,7 @@ async function rpcProxy(request, env, identity) {
   const path = incoming.searchParams.get('path') || '/';
   if (!path.startsWith('/') || path.startsWith('//') || /[\\\u0000-\u001F]/.test(path)) fail(400, 'RPC_PATH_REJECTED', 'Unsupported Rings request.');
   const network = networkConfig(env).network;
-  if (network !== 'devnet') fail(503, 'NETWORK_NOT_SUPPORTED', 'This release supports Rings on devnet only.');
-  const host = network === 'mainnet-beta' ? 'mainnet.helius-rpc.com' : 'devnet.helius-rpc.com';
+  const host = new URL(getNetworkConfig(network).rpcUrl).hostname;
   const target = new URL(path, `https://${host}`);
   if (target.hostname !== host || [...target.searchParams.keys()].some((key) => !['nonce','job','jobId'].includes(key))) fail(400, 'RPC_PATH_REJECTED', 'Unsupported Rings request.');
   const pathname = target.pathname;
@@ -431,8 +456,9 @@ export async function handleApi(request, env, dependencies = {}) {
     const identity = request.headers.get(IDENTITY_HEADER);
     if (path === '/api/config' && request.method === 'GET') {
       const chain = networkConfig(env);
+      const controls = paymentControls(env);
       const wallet = await linkedWallet(env, identity);
-      return json({ ...chain, authenticated: Boolean(identity), identity: identity || null, wallet, draftsEnabled: Boolean(identity && wallet && env.DB), paymentsEnabled: Boolean(identity && wallet && env.DB && chain.network === 'devnet' && !missingPayments(env).length), rpcEnabled: Boolean(identity && wallet && env.HELIUS_API_KEY && chain.network === 'devnet'), missingConfiguration: [...(!env.DB ? ['DB'] : []), ...missingPayments(env)], privacyNotice: 'Payment amounts are confidential onchain; wallet addresses remain public. This service can read your deal terms and the payment you disclose for verification.' });
+      return json({ ...chain, ...controls, authenticated: Boolean(identity), identity: identity || null, wallet, draftsEnabled: Boolean(identity && wallet && env.DB), paymentsEnabled: Boolean(identity && wallet && env.DB && !controls.paymentsPaused && !missingPayments(env).length), walletOperationsEnabled: Boolean(identity && wallet && env.DB && !missingPayments(env).length), rpcEnabled: Boolean(identity && wallet && env.HELIUS_API_KEY), missingConfiguration: [...(!env.DB ? ['DB'] : []), ...missingPayments(env)], privacyNotice: 'Payment amounts are confidential onchain; wallet addresses remain public. This service can read your deal terms and the payment you disclose for verification.' });
     }
     if (!identity) fail(401, 'SIGN_IN_REQUIRED', 'Sign in to this workspace to continue.');
     if (identity.length > 256) fail(401, 'INVALID_IDENTITY', 'The workspace identity is invalid.');
@@ -531,13 +557,14 @@ export async function handleApi(request, env, dependencies = {}) {
       if (action === 'payment-intents' && request.method === 'POST') {
         await bodyJson(request);
         if (wallet !== deal.brand_wallet) fail(403, 'PAYER_REQUIRED', 'Only the brand wallet can pay this agreement.');
-        if (networkConfig(env).network !== 'devnet') fail(503, 'UNSUPPORTED_PAYMENT_NETWORK', 'This release supports Solana devnet test payments only.');
+        networkConfig(env);
         const existing = await first(env.DB, 'SELECT * FROM payment_intents WHERE deal_id=?', id);
         if (existing) return json(await paymentResponse(env, existing));
         if (deal.status !== 'ready') fail(409, 'APPROVALS_REQUIRED', 'Both parties must approve the same terms before payment.');
         if (missingPayments(env).length) fail(503, 'PAYMENTS_NOT_CONFIGURED', 'The Rings connection and secure reconciliation must be configured before payment.');
         await encryptionKey(env);
         const terms = JSON.parse(deal.terms_json);
+        requireNewPayment(env, terms.amountAtomic);
         const chain = networkConfig(env);
         if (terms.mint !== chain.mint || terms.network !== chain.network) fail(409, 'PAYMENT_CONFIG_CHANGED', 'The approved payment asset or network no longer matches the workspace. Create a new agreement.');
         const idempotencyKey = request.headers.get('idempotency-key');
@@ -564,7 +591,8 @@ export async function handleApi(request, env, dependencies = {}) {
       const deal = await authorizedDeal(env, row.deal_id, wallet);
       if (request.method === 'POST' && action === 'submit') {
         if (wallet !== deal.brand_wallet) fail(403, 'PAYER_REQUIRED', 'Only the brand wallet can submit this payment.');
-        if (networkConfig(env).network !== 'devnet' || JSON.parse(row.snapshot_json).network !== 'devnet') fail(503, 'UNSUPPORTED_PAYMENT_NETWORK', 'This release supports Solana devnet test payments only.');
+        const approvedPayment = JSON.parse(row.snapshot_json);
+        if (networkConfig(env).network !== approvedPayment.network || networkConfig(env).mint !== approvedPayment.mint) fail(409, 'PAYMENT_CONFIG_CHANGED', 'This payment belongs to a different network or asset.');
         await limited(env, identity, 'payment_submit', 20);
         const body = await bodyJson(request);
         const signature = transactionSignature(body.txSignature);
@@ -574,6 +602,7 @@ export async function handleApi(request, env, dependencies = {}) {
           row = await reconcile(env, row, dependencies);
           return json(await paymentResponse(env, row), row.status === 'pending' ? 202 : 200);
         }
+        requireNewPayment(env, approvedPayment.amountAtomic);
         const viewingKey = boundedText(body.transactionViewingKey, 'Transaction viewing key', 256);
         try { if (unbase64(viewingKey).length !== 32) throw new Error('Invalid key length'); }
         catch { fail(400, 'INVALID_TRANSACTION_VIEWING_KEY', 'Provide the base64 transaction-only viewing key. Never submit a wallet secret or master viewing key.'); }

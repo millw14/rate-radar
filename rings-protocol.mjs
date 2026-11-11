@@ -1,8 +1,11 @@
 // Wire contract shared by the browser and verifier. No secret is persisted here.
+import { getNetworkConfig } from './rings-networks.mjs';
+
+// Development remains the default; the server explicitly selects production.
 export const RINGS_NETWORK = 'devnet';
 export const SOL_MINT = '11111111111111111111111111111111';
-export const DEVNET_USDC_MINT = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
-export const DEVNET_GENESIS_HASH = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+export const DEVNET_USDC_MINT = getNetworkConfig('devnet').usdcMint;
+export const DEVNET_GENESIS_HASH = getNetworkConfig('devnet').genesisHash;
 
 export function amountAtomic(value) {
   const text = typeof value === 'bigint' ? value.toString() : value;
@@ -13,7 +16,8 @@ export function amountAtomic(value) {
 }
 
 export function paymentMemo(intent) {
-  if (!intent || intent.network !== RINGS_NETWORK) throw new Error('Payments are enabled on Solana devnet only.');
+  if (!intent || typeof intent.network !== 'string') throw new Error('The payment must specify its Solana network.');
+  getNetworkConfig(intent.network);
   for (const field of ['id', 'dealId', 'termsHash', 'memo', 'mint', 'payerWallet', 'recipientWallet']) {
     if (typeof intent[field] !== 'string' || !intent[field] || intent[field].length > 256) throw new Error(`Invalid payment intent: ${field}.`);
   }

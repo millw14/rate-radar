@@ -7,6 +7,7 @@ import { treeAddress, internalUserRecordPda, splAssetRegistryAddress, nullifierP
 import { getBase58Decoder, getAddressEncoder } from '@solana/kit';
 import { verifyRingsPayment, decodePaymentInstruction } from './rings-verifier.mjs';
 import { SOL_MINT, DEVNET_USDC_MINT, DEVNET_GENESIS_HASH, paymentMemo, toBase64 } from './rings-protocol.mjs';
+import { getNetworkConfig } from './rings-networks.mjs';
 
 await initializePoseidon();
 const encode58 = (bytes) => getBase58Decoder().decode(bytes);
@@ -18,7 +19,7 @@ const txSignature = encode58(new Uint8Array(64).fill(5));
 const intent = { id: 'intent-1', dealId: 'deal-1', termsHash: 'terms-1', memo: 'random-challenge-1', mint: SOL_MINT, amountAtomic: '50', payerWallet: senderAddress.solanaAddress(), recipientWallet: recipientAddress.solanaAddress(), network: 'devnet' };
 const env = { RINGS_NETWORK: 'devnet', HELIUS_API_KEY: 'test-only-not-a-real-key' };
 
-async function fixture({ memo = paymentMemo(intent), amount = 50n, falseCommitment = false, mint = SOL_MINT, wrongAssetId = false } = {}) {
+async function fixture({ network = 'devnet', memo = paymentMemo({ ...intent, network }), amount = 50n, falseCommitment = false, mint = SOL_MINT, wrongAssetId = false } = {}) {
   const input = new Utxo({ owner: senderAddress.signingPublicKey, asset: mint, amount: 100n, blinding: new Uint8Array(32).fill(3) });
   const transfer = new ConfidentialTransfer(senderAddress, [ProofInputUtxo.fromKeypair(input, sender)], intent.payerWallet);
   transfer.send(recipientAddress, mint, amount);
@@ -57,7 +58,7 @@ async function fixture({ memo = paymentMemo(intent), amount = 50n, falseCommitme
   };
   const pda = await internalUserRecordPda(intent.recipientWallet);
   const record = new Uint8Array([1, ...getAddressEncoder().encode(intent.recipientWallet), pda.bump, ...recipientAddress.nullifierPublicKey, ...recipientAddress.viewingPublicKey.toBytes(), 0]);
-  const disclosure = { network: 'devnet', txSignature, eventIndex: 0, outputIndex, transactionViewingKey: toBase64(txKey.secretBytes()), intent: { ...intent, mint } };
+  const disclosure = { network, txSignature, eventIndex: 0, outputIndex, transactionViewingKey: toBase64(txKey.secretBytes()), intent: { ...intent, mint, network } };
   const assetPda = mint === SOL_MINT ? null : await splAssetRegistryAddress(mint);
   const assetRecord = new Uint8Array(48);
   assetRecord[0] = 5;
@@ -66,10 +67,11 @@ async function fixture({ memo = paymentMemo(intent), amount = 50n, falseCommitme
   txKey.destroy();
   const calls = [];
   const fetchImpl = async (_url, init) => {
+    assert.equal(new URL(_url).hostname, new URL(getNetworkConfig(network).rpcUrl).hostname);
     const body = JSON.parse(init.body);
     calls.push(body);
     let result;
-    if (body.method === 'getGenesisHash') result = DEVNET_GENESIS_HASH;
+    if (body.method === 'getGenesisHash') result = getNetworkConfig(network).genesisHash;
     else if (body.method === 'getTransaction') { assert.equal(body.params[1].commitment, 'finalized'); assert.equal(body.params[1].maxSupportedTransactionVersion, 1); result = chain; }
     else if (body.method === 'getAccountInfo' && body.params[0] === pda.address) result = { value: { owner: USER_REGISTRY_PROGRAM_ID, lamports: 1000000, data: [toBase64(record), 'base64'] } };
     else if (body.method === 'getAccountInfo' && body.params[0] === assetPda) result = { value: { owner: SHIELDED_POOL_PROGRAM_ID, lamports: 1000000, data: [toBase64(assetRecord), 'base64'] } };
@@ -103,6 +105,22 @@ test('verifies devnet USDC through its onchain mint registry and rejects a diffe
   assert.equal(verified.evidence.mint, DEVNET_USDC_MINT);
   const bad = await fixture({ mint: DEVNET_USDC_MINT, wrongAssetId: true });
   assert.equal((await verifyRingsPayment(bad.disclosure, env, { fetchImpl: bad.fetchImpl })).status, 'failed');
+});
+
+test('mainnet USDC evidence is bound to the mainnet endpoint, full genesis, and immutable intent cluster', async () => {
+  const network = getNetworkConfig('mainnet-beta');
+  const mainnetEnv = { ...env, RINGS_NETWORK: network.network, RINGS_USDC_MINT: network.usdcMint };
+  const f = await fixture({ network: network.network, mint: network.usdcMint });
+  const result = await verifyRingsPayment(f.disclosure, mainnetEnv, { fetchImpl: f.fetchImpl });
+  assert.equal(result.status, 'verified', result.reason);
+  assert.equal(result.evidence.network, 'mainnet-beta');
+  assert.equal(result.evidence.mint, network.usdcMint);
+  const neverFetch = async () => assert.fail('A mixed-cluster request cannot reach RPC');
+  assert.equal((await verifyRingsPayment(f.disclosure, env, { fetchImpl: neverFetch })).status, 'failed');
+  assert.equal((await verifyRingsPayment({ ...f.disclosure, intent: { ...f.disclosure.intent, network: 'devnet' } }, mainnetEnv, { fetchImpl: neverFetch })).status, 'failed');
+  assert.equal((await verifyRingsPayment({ ...f.disclosure, intent: { ...f.disclosure.intent, mint: DEVNET_USDC_MINT } }, mainnetEnv, { fetchImpl: neverFetch })).status, 'failed');
+  const wrongGenesis = async (_url, init) => Response.json({ jsonrpc: '2.0', id: 1, result: JSON.parse(init.body).method === 'getGenesisHash' ? DEVNET_GENESIS_HASH : null });
+  assert.equal((await verifyRingsPayment(f.disclosure, mainnetEnv, { fetchImpl: wrongGenesis })).status, 'pending');
 });
 
 test('rejects a replay against another intent or changed terms', async () => {

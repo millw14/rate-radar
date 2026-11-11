@@ -6,12 +6,13 @@
   "scripts": {
     "build": "node build.mjs",
     "dev": "node server.mjs",
-    "test": "node --test *.test.mjs server/*.test.mjs",
+    "test": "node --test *.test.mjs server/*.test.mjs scripts/*.test.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/migrate-local.mjs",
     "test:worker": "node scripts/verify-worker-crypto.mjs",
     "check:live": "node scripts/verify-live-rings.mjs",
     "db:migrate:vercel": "node scripts/migrate-vercel.mjs",
+    "db:backup:vercel": "node scripts/backup-vercel.mjs",
     "dev:vercel": "vercel dev"
   },
   "dependencies": {

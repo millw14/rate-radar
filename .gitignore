@@ -11,3 +11,4 @@ dist/
 coverage/
 wrangler.local.json
 .vercel
+backups/
