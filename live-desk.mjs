@@ -40,7 +40,9 @@ export function createLiveDesk({icon,escape:esc,openDialog,closeDialog,toast,cat
   const attempts = new Map();
   const keys = new Map();
   const selected = () => deals.find(deal => deal.id === selectedId);
-  const address = () => config?.wallet || null;
+  const address = () => config?.authenticated ? config.wallet || null : null;
+  const walletSession = () => config?.authMode === 'wallet-session';
+  const walletLoginAllowed = () => walletSession() && config?.walletLoginEnabled === true;
   const canDraft = () => Boolean(config?.authenticated && address() && config?.draftsEnabled !== false);
   const network = () => config?.network || 'devnet';
   const symbol = () => config?.symbol || 'USDC';
@@ -65,7 +67,10 @@ export function createLiveDesk({icon,escape:esc,openDialog,closeDialog,toast,cat
     try {await task();}catch(error){dialogError(error);}finally{busy=false;if(target?.isConnected){target.disabled=false;target.removeAttribute('aria-busy');}renderHeader();}
   }
   async function loadWorkspace() {
-    config=await api('/api/config');
+    const previousWallet=address();
+    const nextConfig=await api('/api/config');
+    if(previousWallet&&previousWallet!==(nextConfig.authenticated?nextConfig.wallet:null))await clearLocalWallet();
+    config=nextConfig;
     if(config.authenticated&&config.wallet){const [d,r]=await Promise.all([api('/api/deals'),api('/api/receipts')]);deals=d.deals||[];receipts=r.receipts||[];}else{deals=[];receipts=[];}
     loading=false;loadError='';notify();
   }
@@ -79,6 +84,9 @@ export function createLiveDesk({icon,escape:esc,openDialog,closeDialog,toast,cat
   function workspaceNotice(){
     if(loading)return `<div class="workspace-notice" role="status"><span class="receipt-icon">${icon('lock')}</span><div><strong>Opening your workspace.</strong><p>Loading authenticated deal records.</p></div></div>`;
     if(loadError)return `<div class="workspace-notice"><span class="receipt-icon">${icon('info')}</span><div><strong>Workspace unavailable.</strong><p>${esc(loadError)}</p></div><button class="text-button" data-action="refresh-workspace">Retry ${icon('reset')}</button></div>`;
+    if(!config?.authenticated && walletSession())return walletLoginAllowed()
+      ? `<div class="workspace-notice"><span class="receipt-icon">${icon('shield')}</span><div><strong>Your wallet is your sign-in.</strong><p>Connect and sign a one-time message to open your workspace.</p></div><button class="button dark" data-action="connect-wallet">Connect wallet ${icon('arrow-up-right')}</button></div>`
+      : `<div class="workspace-notice"><span class="receipt-icon">${icon('info')}</span><div><strong>Wallet sign-in awaits setup.</strong><p>A workspace administrator needs to finish the server setup.</p></div><button class="text-button" data-action="workspace-status">Setup status ${icon('arrow-up-right')}</button></div>`;
     if(!config?.authenticated)return `<div class="workspace-notice"><span class="receipt-icon">${icon('lock')}</span><div><strong>Sign in to your workspace.</strong><p>Deals are available only to their authenticated participants.</p></div><button class="text-button" data-action="refresh-workspace">Refresh session ${icon('reset')}</button></div>`;
     if(!address())return `<div class="workspace-notice"><span class="receipt-icon">${icon('shield')}</span><div><strong>Your wallet is your signature.</strong><p>Connect a Solana wallet to create and agree deals.</p></div><button class="button dark" data-action="connect-wallet">Connect wallet ${icon('arrow-up-right')}</button></div>`;
     if(!config.paymentsEnabled)return `<div class="workspace-notice setup-notice"><span class="receipt-icon">${icon('info')}</span><div><strong>Payments awaiting setup.</strong><p>You can draft and agree terms while this workspace is configured.</p></div><button class="text-button" data-action="workspace-status">Setup status ${icon('arrow-up-right')}</button></div>`;
@@ -111,14 +119,32 @@ export function createLiveDesk({icon,escape:esc,openDialog,closeDialog,toast,cat
     return ringsWallet;
   }
   async function connect(){
-    if(!config){await loadWorkspace();}
-    if(!config.authenticated){statusDialog();return;}
-    if(address()&&connectedAddress===address()){walletDialog();return;}
+    if(!config||walletSession()){await loadWorkspace();}
+    if(!config.authenticated&&!walletLoginAllowed()){statusDialog();return;}
+    if(config.authenticated&&address()&&(walletSession()||connectedAddress===address())){walletDialog();return;}
     const wallet=await ensureWallet();
     const challenge=await api('/api/wallet/challenge',{method:'POST',body:{wallet:connectedAddress}});
     const signature=await wallet.signMessage(challenge.message);
     await api('/api/wallet/verify',{method:'POST',body:{challengeId:challenge.challengeId,signature}});
-    await loadWorkspace();walletDialog();
+    await loadWorkspace();
+    if(!config.authenticated||address()!==connectedAddress)throw new Error('Wallet sign-in could not be confirmed. Please try again.');
+    walletDialog();
+  }
+  async function disconnect(){
+    const endSession=walletSession();
+    if(endSession)await api('/api/session/logout',{method:'POST',body:{}});
+    // Revoking the server session does not delete the wallet's account identity.
+    // Always discard browser-held privacy state even if extension disconnect fails.
+    await clearLocalWallet();
+    if(endSession){config={...config,authenticated:false,wallet:null,draftsEnabled:false,paymentsEnabled:false,sessionExpiresAt:null};deals=[];receipts=[];selectedId=null;showVolume=false;filter='all';}
+    closeDialog();notify();
+    if(endSession){try{await loadWorkspace();}catch(error){loadError=userFacingError(error);notify();}}
+    toast(endSession?'Signed out. Your wallet identity remains linked.':'Wallet disconnected from this browser. Your account link remains.');
+  }
+  async function clearLocalWallet(){
+    try{await ringsWallet?.disconnect();}catch{/* The extension may already be disconnected. */}
+    ringsWallet=null;connectedAddress=null;unlocked=false;registered=false;balances=null;walletVersion1=null;pendingRegistration=null;depositDraft=null;
+    attempts.clear();keys.clear();
   }
   function walletDialog(){
     const balance=balances?.privateBalances?.find(b=>b.mint===config?.mint)?.amountAtomic;
@@ -134,7 +160,7 @@ export function createLiveDesk({icon,escape:esc,openDialog,closeDialog,toast,cat
   async function deposit(){if(!depositDraft||!config?.paymentsEnabled)return;const result=await ringsWallet.deposit(depositDraft);depositDraft=null;try{balances=await ringsWallet.getBalances();}catch{balances=null;}walletDialog();toast(result.status==='confirmed'?'Deposit confirmed on devnet.':'Deposit submitted. Refresh after confirmation.');if(result.signature)$('#live-error')?.insertAdjacentHTML('beforebegin',`<p><a href="${explorer(result.signature)}" target="_blank" rel="noopener noreferrer">View deposit transaction ↗</a></p>`);}
 
   function newDeal(){
-    if(!canDraft()){if(config?.authenticated&&!address())connectPrompt();else statusDialog();return;}
+    if(!canDraft()){if((config?.authenticated&&!address())||walletLoginAllowed())connectPrompt();else statusDialog();return;}
     const deadline=new Date(Date.now()+7*86400000).toISOString().slice(0,10);
     openDialog('Start with the terms.','NEW DEAL · DEVNET',`<form id="deal-form"><div class="form-grid"><label class="full">Project<input name="title" placeholder="e.g. The launch edit" maxlength="80" required /></label><label>Your role<select name="role"><option value="brand">Brand · paying</option><option value="creator">Creator · receiving</option></select></label><label>Amount · test ${esc(symbol())}<input name="amount" type="number" min="0.000001" max="10000000" step="0.000001" inputmode="decimal" placeholder="1,250" required /></label><label class="full">Counterparty wallet<input name="counterparty" class="wallet-address" placeholder="Solana wallet address" autocomplete="off" spellcheck="false" minlength="32" maxlength="44" pattern="[1-9A-HJ-NP-Za-km-z]{32,44}" required /></label><label>Deliverable<select name="category">${categories.map(c=>`<option>${esc(c)}</option>`).join('')}</select></label><label>Due date<input name="deadline" type="date" value="${deadline}" required /></label><label class="full">Usage<select name="usage"><option>Organic only</option><option>30-day paid usage</option><option>90-day paid usage</option></select></label><label class="full">Additional terms <span class="optional-label">Optional</span><textarea name="notes" rows="3" maxlength="2000" placeholder="Deliverables, timing, and any other agreed terms"></textarea></label></div><p class="form-note">Both wallets must sign the same terms before payment. Your draft is stored on the workspace server.</p><p id="live-error" class="field-error" role="alert" hidden></p><div class="dialog-actions"><button type="button" class="button outline" data-action="close">Cancel</button><button type="submit" class="button dark">Create draft ${icon('arrow-right')}</button></div></form>`);
     $('#deal-form').addEventListener('submit',event=>{
@@ -142,7 +168,7 @@ export function createLiveDesk({icon,escape:esc,openDialog,closeDialog,toast,cat
       run(async()=>{atomicAmount(amount);if(counterparty===address())throw new Error('Choose a different wallet for the counterparty.');const {deal}=await api('/api/deals',{method:'POST',body:{title:String(f.get('title')).trim(),brandWallet:role==='brand'?address():counterparty,creatorWallet:role==='creator'?address():counterparty,amount,category:f.get('category'),usage:f.get('usage'),deadline:f.get('deadline'),notes:String(f.get('notes')||'').trim()}});selectedId=deal.id;filter='all';await loadWorkspace();closeDialog();location.hash='deals';toast('Draft saved. Both parties can now review it.');},event.submitter);
     });
   }
-  function connectPrompt(){openDialog('Sign in with your wallet.','YOUR WORKSPACE',`<p>Connect your Solana wallet and sign a one-time message to link it to this authenticated workspace. This does not authorize a payment.</p><p id="live-error" class="field-error" role="alert" hidden></p><div class="dialog-actions"><button class="button outline" data-action="close">Back</button><button class="button dark" data-action="connect-wallet">Connect wallet ${icon('arrow-up-right')}</button></div>`);}
+  function connectPrompt(){openDialog('Sign in with your wallet.','YOUR WORKSPACE',`<p>${walletSession()?'Connect your Solana wallet and sign a one-time message to sign in to your workspace.':'Connect your Solana wallet and sign a one-time message to link it to this authenticated workspace.'} This does not authorize a payment.</p><p id="live-error" class="field-error" role="alert" hidden></p><div class="dialog-actions"><button class="button outline" data-action="close">Back</button><button class="button dark" data-action="connect-wallet">Connect wallet ${icon('arrow-up-right')}</button></div>`);}
   function termsMarkup(d){return `<div class="local-receipt"><div><span>Project</span><strong>${esc(d.title)}</strong></div><div><span>Brand · payer</span><strong class="wallet-address">${esc(d.brandWallet)}</strong></div><div><span>Creator · recipient</span><strong class="wallet-address">${esc(d.creatorWallet)}</strong></div><div><span>Amount</span><strong>${money(d.amount)} test ${esc(symbol())}</strong></div><div><span>Deliverable</span><strong>${esc(d.category)}</strong></div><div><span>Due date</span><strong>${day(d.deadline)}</strong></div><div><span>Usage</span><strong>${esc(d.usage)}</strong></div>${d.notes?`<div><span>Additional terms</span><strong class="terms-notes">${esc(d.notes)}</strong></div>`:''}</div>`;}
   async function review(){
     let d=selected();if(!d)return;
@@ -240,7 +266,7 @@ export function createLiveDesk({icon,escape:esc,openDialog,closeDialog,toast,cat
     else if(action==='export-receipt'){const receipt=receipts.find(r=>r.id===target.dataset.id);if(receipt)download(receipt,`${receipt.id}-receipt.json`);}
     else run(async()=>{
       if(action==='connect-wallet')await connect();
-      else if(action==='disconnect-wallet'){await ringsWallet?.disconnect();ringsWallet=null;connectedAddress=null;unlocked=false;registered=false;balances=null;walletVersion1=null;pendingRegistration=null;closeDialog();toast('Wallet disconnected from this browser. Your account link remains.');}
+      else if(action==='disconnect-wallet')await disconnect();
       else if(action==='unlock-wallet')await unlock();
       else if(action==='register-wallet')await register();
       else if(action==='refresh-balance'){balances=await ringsWallet.getBalances();registered=Boolean(balances.registered);if(registered)pendingRegistration=null;walletDialog();}

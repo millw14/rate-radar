@@ -6,13 +6,13 @@ A confidential sponsorship deal desk using **Helius Solana Privacy Rings**. Bran
 
 ## Status
 
-This release targets **Solana devnet only**. It contains a real Rings SDK integration, a Cloudflare Worker API, and a D1 database. There is no simulated payment action and no client-controlled paid status. A Helius API key, funded devnet wallets, version 1 wallet signing support, and a registered Rings asset are required for onchain execution. Mainnet is intentionally unsupported.
+This release targets **Solana devnet only**. It contains a real Rings SDK integration and a persistent API. Vercel uses Node.js Functions, Turso SQLite, and wallet sessions. The original Sites host uses a Cloudflare Worker and D1. There is no simulated payment action and no client-controlled paid status. A Helius API key, funded devnet wallets, version 1 wallet signing support, and a registered Rings asset are required for onchain execution. Mainnet is intentionally unsupported.
 
 The rate index remains an explicitly fictional dataset. Real receipts are not automatically contributed to it. Benchmark privacy proofs and aggregation are separate future work.
 
 ## Local setup
 
-Requires Node.js 24 or newer and npm.
+Requires Node.js 24 LTS and npm.
 
 ```sh
 npm ci
@@ -60,6 +60,22 @@ The verifier trusts the configured Helius endpoint for finalized chain data. It 
 
 ## Hosting and access
 
+### Vercel
+
+`vercel.json` deploys static assets from `dist/client` and routes `/api/*` to one Node.js Function. The function uses Turso through a D1-compatible adapter so the existing agreement and payment transaction rules remain unchanged. Configure `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `HELIUS_API_KEY`, `RECEIPT_ENCRYPTION_KEY`, `RINGS_NETWORK`, and `RINGS_USDC_MINT` on the project. Keep database and API credentials secret and separate production from preview resources.
+
+Apply migrations once before releasing a deployment, using an ignored environment file containing the target database credentials:
+
+```sh
+npm run db:migrate:vercel -- --env-file .env.vercel.local
+```
+
+Wallet login verifies a short-lived Ed25519 challenge bound to the browser and origin. Only a verified signature creates an opaque HttpOnly session cookie; the database stores its hash. Sessions expire after seven days and Disconnect revokes the current session. Client-supplied Sites identity headers are discarded. Deal terms and payments still require their own wallet signatures.
+
+Vercel deployment protection remains enabled. Moving hosting does not make private agreement data public.
+
+### Original Sites host
+
 `.openai/hosting.json` preserves this Site's identity and declares its D1 binding. The build emits `dist/client` and `dist/server/index.js`, plus the official Poseidon WASM module for the Worker runtime. Migrations live in `drizzle/`; append migrations rather than editing applied SQL.
 
 Sites supplies the trusted `oai-authenticated-user-id` identity header. Do not place this Worker directly behind an untrusted public origin that lets callers set that header. A different host must supply a real authenticated identity boundary before using these routes.
@@ -76,7 +92,7 @@ npm run test:worker
 
 Tests cover real Ed25519 challenge signatures, SQLite authorization and state transitions, immutable agreement versions, replay/idempotency, pending/failed payment handling, signed transaction recovery, confidential output decryption and commitment matching, and wallet transport boundaries. Worker verification checks the official Poseidon implementation against a known SDK output in the actual Workers runtime.
 
-Browser QA exercises wallet authentication, draft creation, signed approval, server persistence across reload, responsive layouts, and accessibility. Cryptographic fixtures exercise the actual SDK but are not a live network settlement.
+Browser QA exercises wallet authentication, draft creation, signed approval, server persistence across reload, responsive layouts, and accessibility. The Vercel session flow also passes real browser → API → libSQL login, HttpOnly cookie persistence, agreement signing, and logout revocation; this local integration test uses an isolated SQLite database. Cryptographic fixtures exercise the actual SDK but are not a live network settlement.
 
 Live checks on November 11, 2026 verified the app's Worker proxy against Solana devnet, browser privacy-key unlock, Circle USDC's Rings registry (asset ID 59), signed prover attestation, and all 136 published proving-key pins. Repeat these read-only checks after configuring the server and connecting a wallet in the local app:
 

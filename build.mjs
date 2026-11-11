@@ -16,6 +16,7 @@ await build({
   loader: { '.wasm': 'file' }, assetNames: 'assets/[name]-[hash]',
   define: { 'process.env.NODE_ENV': '"production"' },
 });
+if (process.env.VERCEL !== '1') {
 await build({
   entryPoints: ['worker.mjs'], outfile: 'dist/server/index.js', bundle: true,
   format: 'esm', platform: 'node', target: 'es2022', minify: false,
@@ -29,4 +30,5 @@ await copyFile('node_modules/@lightprotocol/hasher.rs/dist/light_wasm_hasher_bg.
 await copyFile('.openai/hosting.json', 'dist/.openai/hosting.json');
 try { await access('drizzle'); await cp('drizzle', 'dist/.openai/drizzle', { recursive: true }); } catch {}
 await writeFile('dist/server/wrangler.json', JSON.stringify(wranglerConfig({built:true}), null, 2)+'\n');
-console.log('Rate Radar built → dist/client + dist/server (Rings + D1)');
+}
+console.log(process.env.VERCEL === '1' ? 'Rate Radar built → dist/client + Vercel API source' : 'Rate Radar built → dist/client + dist/server (Rings + D1)');

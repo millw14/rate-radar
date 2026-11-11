@@ -1,0 +1,8 @@
+.env*
+.wrangler
+.git
+.openai
+coverage
+dist
+*.test.mjs
+server/*.test.mjs
