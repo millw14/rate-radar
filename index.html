@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f6f6ee" />
+  <meta name="description" content="Rate Radar. A private payment intelligence workspace for creators. Explore sample rates, compare an offer, and try a private receipt contribution." />
+  <title>Rate Radar — Private creator deals</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;450;500;550;600;650;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <a class="skip-link" href="#explore">Skip to rate index</a>
+  <header class="site-header wrap">
+    <a class="brand" href="#deals" aria-label="Rate Radar home"><img src="/assets/favicon.svg" alt="" width="32" height="32" />rate<span>radar</span></a>
+    <nav class="desktop-nav" aria-label="Main navigation"><a href="#deals" data-nav="deals" aria-current="page">Deal desk <span>01</span></a><a href="#explore" data-nav="index">Rate index <span>02</span></a><a href="#studio" data-nav="studio">Receipts <span class="studio-dot" hidden></span></a></nav>
+    <div class="header-actions"><button class="preview-badge" data-action="methodology"><span></span> Demo edition</button><button class="button small dark" data-action="new-deal">New deal <span data-icon="plus"></span></button><button class="mobile-menu icon-button" aria-label="Open navigation" data-action="menu"><span data-icon="menu"></span></button></div>
+  </header>
+  <main class="wrap">
+    <section id="deals-page" class="deals-page" aria-labelledby="deals-title"></section>
+    <div id="index-page" hidden>
+      <section class="index-intro" aria-labelledby="index-title">
+        <div class="intro-copy"><p class="eyebrow">THE CREATOR RATE INDEX</p><h1 id="index-title">Know your <span class="serif">worth.</span></h1><p>Private signals. A clearer picture.</p></div>
+        <div class="index-emblem" aria-hidden="true"><svg viewBox="0 0 180 180" fill="none"><circle cx="90" cy="90" r="70" stroke="currentColor" stroke-width=".7"/><circle cx="90" cy="90" r="48" stroke="currentColor" stroke-width=".7"/><circle cx="90" cy="90" r="25" stroke="currentColor" stroke-width=".7"/><path d="M90 5v170M5 90h170" stroke="currentColor" stroke-width=".7"/><path d="m90 90 50-50" stroke="currentColor" stroke-width="1.5"/><circle cx="90" cy="90" r="5" fill="currentColor"/><circle cx="124" cy="56" r="3.5" fill="currentColor"/><circle cx="48" cy="110" r="3" fill="currentColor"/></svg><span>RR / SIGNAL STUDY 001</span></div>
+      </section>
+      <section id="explore" class="index-workspace" aria-label="Rate explorer">
+        <div class="workspace-heading"><span class="eyebrow">01 — EXPLORE</span><button class="text-button" data-action="methodology">Sample data <span data-icon="info"></span></button></div>
+        <div class="category-tabs" role="group" aria-label="Content format" id="category-tabs"></div>
+        <div class="filter-bar"><div class="filter-fields"><label><span>Audience</span><select id="audience-filter" aria-label="Audience size"></select></label><label><span>Market</span><select id="region-filter" aria-label="Creator market"></select></label><div class="fixed-filter"><span>Scope</span><strong>Organic placement</strong></div></div><button class="text-button" data-action="reset">Reset <span data-icon="reset"></span></button></div>
+        <div class="benchmark-grid">
+          <article class="benchmark-card"><div class="card-heading"><p class="eyebrow" id="cohort-eyebrow">X POST / THREAD · GLOBAL</p><span class="sample-pill">SAMPLE / USD</span></div><div class="benchmark-number"><span id="median-value">$850</span><div><span>Median rate</span><strong id="sample-count">163 sample receipts</strong></div></div><div class="distribution" id="distribution" role="img" aria-label="Illustrative rate distribution"></div><div class="benchmark-stats"><div><span>Lower quartile</span><strong id="p25-value">$575</strong></div><div><span>Median</span><strong id="stat-median">$850</strong></div><div><span>Upper quartile</span><strong id="p75-value">$1,200</strong></div></div><div class="benchmark-footer"><span>Per deliverable · No paid usage or exclusivity</span><button class="text-button" data-action="methodology">Methodology <span data-icon="arrow-up-right"></span></button></div></article>
+          <aside class="offer-card" aria-labelledby="offer-title"><div class="offer-heading"><span class="tiny-eyebrow">YOUR NEXT DEAL</span><span class="offer-icon" data-icon="arrow-up-right"></span></div><h2 id="offer-title">How does<br>your offer <span class="serif">compare?</span></h2><form id="offer-form"><label for="offer-amount">Offer amount</label><div class="amount-input"><span>$</span><input id="offer-amount" name="amount" type="number" min="1" max="10000000" step="0.01" placeholder="0" required inputmode="decimal" aria-describedby="offer-error" /><span>USD</span></div><p id="offer-error" class="field-error" hidden></p><button class="button lime" type="submit">Compare offer <span data-icon="arrow-up-right"></span></button></form><div id="offer-result" class="offer-result" hidden aria-live="polite"></div><div class="offer-footnote"><span data-icon="lock"></span> Only on this device.</div></aside>
+        </div>
+        <div class="market-heading"><div><span class="eyebrow">THE WIDER PICTURE</span><h2>Across the market.</h2></div><div><label class="search-control"><span data-icon="search"></span><input id="market-search" type="search" placeholder="Find a format" aria-label="Search market formats" /></label><button class="icon-button" data-action="export" aria-label="Download sample benchmarks as CSV" title="Download sample CSV"><span data-icon="download"></span></button></div></div>
+        <div class="market-table-wrap"><table class="market-table"><caption class="sr-only">Fictional benchmark comparisons for the selected audience and market</caption><thead><tr><th scope="col">Deliverable</th><th scope="col">Typical range</th><th scope="col">Median</th><th scope="col">Receipts</th><th scope="col"><span class="sr-only">Explore</span></th></tr></thead><tbody id="market-rows"></tbody></table><div class="empty-state" id="market-empty" hidden>No matching formats.</div></div>
+        <p class="table-note">All rates and counts are fictional. This preview does not verify or move funds.</p>
+      </section>
+    </div>
+    <section id="studio-page" class="studio-page" aria-labelledby="studio-title" hidden></section>
+  </main>
+  <footer class="wrap site-footer"><span class="footer-signature">THE SIGNAL. NOT THE SECRETS.</span><div><button data-action="methodology">Privacy & methodology <span data-icon="arrow-up-right"></span></button><span>Rate Radar © 2026</span></div></footer>
+  <dialog id="app-dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
