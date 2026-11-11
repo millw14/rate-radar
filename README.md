@@ -76,7 +76,17 @@ npm run test:worker
 
 Tests cover real Ed25519 challenge signatures, SQLite authorization and state transitions, immutable agreement versions, replay/idempotency, pending/failed payment handling, signed transaction recovery, confidential output decryption and commitment matching, and wallet transport boundaries. Worker verification checks the official Poseidon implementation against a known SDK output in the actual Workers runtime.
 
-Browser QA exercises wallet authentication, draft creation, signed approval, server persistence across reload, responsive layouts, and accessibility. Cryptographic fixtures exercise the actual SDK but are not a live network settlement. A live test needs the configured Helius key and funded compatible devnet wallets.
+Browser QA exercises wallet authentication, draft creation, signed approval, server persistence across reload, responsive layouts, and accessibility. Cryptographic fixtures exercise the actual SDK but are not a live network settlement.
+
+Live checks on November 11, 2026 verified the app's Worker proxy against Solana devnet, browser privacy-key unlock, Circle USDC's Rings registry (asset ID 59), signed prover attestation, and all 136 published proving-key pins. Repeat these read-only checks after configuring the server and connecting a wallet in the local app:
+
+```sh
+npm run check:live
+# For a different local port:
+RATE_RADAR_URL=http://127.0.0.1:4174 npm run check:live
+```
+
+A completed onchain settlement remains unverified until compatible devnet wallets are funded with test SOL and USDC. These connectivity checks do not claim that a payment settled.
 
 ## Main files
 

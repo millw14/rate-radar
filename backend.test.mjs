@@ -321,6 +321,7 @@ test('the bounded RPC proxy preserves prover jobId and sync headers and redacts 
   const poll = await f.api(`/api/rpc?path=${encodeURIComponent('/v1/spr/prove/circuit0/status?jobId=job%2B123')}`);
   assert.equal(poll.status, 409);
   assert.equal(calls[0].url.hostname, 'devnet.helius-rpc.com');
+  assert.equal(calls[0].options.redirect, 'manual');
   assert.equal(calls[0].url.searchParams.get('jobId'), 'job+123');
   assert.equal(calls[0].url.searchParams.get('api-key'), f.env.HELIUS_API_KEY);
   assert.equal(JSON.stringify(poll.body).includes(f.env.HELIUS_API_KEY), false);
@@ -331,6 +332,22 @@ test('the bounded RPC proxy preserves prover jobId and sync headers and redacts 
   assert.equal(calls[1].options.headers.get('Spr-Tee-Ciphertext'), 'payload');
   const huge = await f.api('/api/wallet/challenge', { method: 'POST', body: { wallet: f.brand.wallet, padding: 'a'.repeat(40000) } });
   assert.equal(huge.status, 413);
+});
+
+test('the RPC proxy rejects redirects without exposing or following their location', async (t) => {
+  const f = await fixture(t);
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response(null, { status: 307, headers: { Location: `https://unexpected.invalid/?api-key=${f.env.HELIUS_API_KEY}` } });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const result = await f.api('/api/rpc', { method: 'POST', body: { jsonrpc: '2.0', id: 1, method: 'getGenesisHash', params: [] } });
+  assert.equal(result.status, 502);
+  assert.equal(result.body.error.code, 'RPC_REDIRECT_REJECTED');
+  assert.equal(calls, 1);
+  assert.equal(JSON.stringify(result.body).includes(f.env.HELIUS_API_KEY), false);
 });
 
 function absentTransactionRpc(method, params) {

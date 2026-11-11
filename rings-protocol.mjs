@@ -2,7 +2,7 @@
 export const RINGS_NETWORK = 'devnet';
 export const SOL_MINT = '11111111111111111111111111111111';
 export const DEVNET_USDC_MINT = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
-export const DEVNET_GENESIS_HASH = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
+export const DEVNET_GENESIS_HASH = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
 
 export function amountAtomic(value) {
   const text = typeof value === 'bigint' ? value.toString() : value;

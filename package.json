@@ -9,7 +9,8 @@
     "test": "node --test *.test.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node scripts/migrate-local.mjs",
-    "test:worker": "node scripts/verify-worker-crypto.mjs"
+    "test:worker": "node scripts/verify-worker-crypto.mjs",
+    "check:live": "node scripts/verify-live-rings.mjs"
   },
   "dependencies": {
     "@heliuslabs/spr": "0.9.0-alpha",

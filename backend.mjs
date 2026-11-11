@@ -405,8 +405,13 @@ async function rpcProxy(request, env, identity) {
   for (const name of ['X-Sync', 'X-Async']) if (request.headers.get(name) === 'true') headers.set(name, 'true');
   target.searchParams.set('api-key', env.HELIUS_API_KEY);
   let upstream;
-  try { upstream = await fetch(target, { method, headers, body, redirect: 'error', signal: AbortSignal.timeout(55000) }); }
+  try { upstream = await fetch(target, { method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(55000) }); }
   catch { fail(502, 'RPC_UNAVAILABLE', 'The Rings service is temporarily unavailable.'); }
+  // Workers supports manual redirects; never forward credentials to a redirect target.
+  if (upstream.status >= 300 && upstream.status < 400) {
+    await upstream.body?.cancel();
+    fail(502, 'RPC_REDIRECT_REJECTED', 'The Rings service returned an unexpected redirect.');
+  }
   const bytes = await readLimitedBody(upstream, 8 * 1024 * 1024, true);
   const outputHeaders = new Headers({ 'Content-Type': upstream.headers.get('content-type') || 'application/json', 'Cache-Control': 'no-store' });
   if (upstream.headers.has('Spr-Tee')) outputHeaders.set('Spr-Tee', upstream.headers.get('Spr-Tee'));

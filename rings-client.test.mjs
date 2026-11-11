@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { getAddressDecoder, getTransactionDecoder, getTransactionEncoder, getSignatureFromTransaction, getBase58Decoder } from '@solana/kit';
 import { createRingsWallet, createProxyFetch } from './rings-client.mjs';
-import { DEVNET_GENESIS_HASH, toBase64, fromBase64 } from './rings-protocol.mjs';
+import { toBase64, fromBase64 } from './rings-protocol.mjs';
 
 const seed = new Uint8Array(32).fill(4);
 const publicKey = ed25519.getPublicKey(seed);
@@ -74,7 +74,8 @@ test('private key derivation stays local; signed registration is checked before 
     const request = JSON.parse(init.body);
     calls.push(request);
     let result;
-    if (request.method === 'getGenesisHash') result = DEVNET_GENESIS_HASH;
+    // Captured from the devnet RPC, independent of the app's network guard.
+    if (request.method === 'getGenesisHash') result = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
     else if (request.method === 'getAccountInfo') result = { context: { slot: 1 }, value: null };
     else if (request.method === 'getLatestBlockhash') result = { context: { slot: 1 }, value: { blockhash: getBase58Decoder().decode(new Uint8Array(32).fill(7)), lastValidBlockHeight: 100 } };
     else if (request.method === 'sendTransaction') {

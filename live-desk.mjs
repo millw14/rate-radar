@@ -5,6 +5,35 @@ const day = value => value && Number.isFinite(Date.parse(value)) ? new Intl.Date
 const statusNames = {draft:'Draft',awaiting_approval:'Awaiting approval',ready:'Ready to pay',payment_pending:'Verifying',paid:'Paid'};
 const stateClass = status => status === 'paid' ? 'paid' : ['ready','payment_pending'].includes(status) ? 'ready' : 'draft';
 
+export function userFacingError(error) {
+  const rawMessage = typeof error === 'string' ? error : error?.message;
+  const message = typeof rawMessage === 'string' ? rawMessage.trim() : '';
+  const codes = [];
+  const seen = new Set();
+  for (let cause = error; cause && typeof cause === 'object' && !seen.has(cause); cause = cause.cause) {
+    seen.add(cause);
+    codes.push(cause.context?.__code, cause.code);
+  }
+  const paymentRecovery = /check settlement before retrying|No new payment is sent automatically/i.test(message);
+  const transportError = codes.some(code => [8100002, 8100003, -32603, -32005, 'RPC_UNAVAILABLE', 'RPC_UPSTREAM_ERROR', 'RPC_REDIRECT_REJECTED'].includes(code))
+    || /(?:Solana error\s*#?\s*|\b)(?:8100002|8100003|\-32603|\-32005)\b/i.test(message);
+  const opaqueDiagnostic = /@solana\/errors|\bnpx\b.*\bdecode\b|Solana error\s*#?\s*-?\d+|<\s*(?:html|!doctype)|\b(?:encoded context|stack trace)\b/i.test(message);
+  if (transportError || opaqueDiagnostic) {
+    return paymentRecovery
+      ? 'The Rings connection is unavailable. Reopen the deal to check settlement before retrying.'
+      : transportError
+        ? 'The Rings connection is temporarily unavailable. Please try again in a moment.'
+        : 'The Rings request could not be completed. Please try again.';
+  }
+  if (/failed to fetch|fetch failed|networkerror|network request failed|load failed|connection (?:reset|refused)|\bECONN(?:RESET|REFUSED)\b/i.test(message)) {
+    return paymentRecovery
+      ? 'The connection was interrupted. Reopen the deal to check settlement before retrying.'
+      : 'Could not reach the service. Check your connection and try again.';
+  }
+  // App validation and recovery instructions are already written for people.
+  return message || 'The request could not be completed. Please try again.';
+}
+
 export function createLiveDesk({icon,escape:esc,openDialog,closeDialog,toast,categories,onChange}) {
   let config = null, deals = [], receipts = [], selectedId = null, filter = 'all', showVolume = false;
   let loading = true, loadError = '', busy = false, ringsWallet = null, connectedAddress = null, unlocked = false, registered = false, balances = null, walletVersion1 = null, pendingRegistration = null;
@@ -25,7 +54,7 @@ export function createLiveDesk({icon,escape:esc,openDialog,closeDialog,toast,cat
     return data;
   }
   function dialogError(error) {
-    const message = error?.message || 'Something went wrong. Please retry.';
+    const message = userFacingError(error);
     const slot=$('#live-error');
     if(slot){slot.textContent=message;slot.hidden=false;}else toast(message);
   }
@@ -40,7 +69,7 @@ export function createLiveDesk({icon,escape:esc,openDialog,closeDialog,toast,cat
     if(config.authenticated&&config.wallet){const [d,r]=await Promise.all([api('/api/deals'),api('/api/receipts')]);deals=d.deals||[];receipts=r.receipts||[];}else{deals=[];receipts=[];}
     loading=false;loadError='';notify();
   }
-  async function init(){try{await loadWorkspace();}catch(error){loading=false;loadError=error.message;notify();}}
+  async function init(){try{await loadWorkspace();}catch(error){loading=false;loadError=userFacingError(error);notify();}}
   function renderHeader(){
     const button=$('#wallet-button');
     if(button){button.textContent=address()?short(address()):'Connect wallet';button.title=address()||'Connect and verify your Solana wallet';button.disabled=busy||loading;}
