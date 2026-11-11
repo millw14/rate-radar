@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#f6f6ee" />
-  <meta name="description" content="Rate Radar. A private payment intelligence workspace for creators. Explore sample rates, compare an offer, and try a private receipt contribution." />
+  <meta name="description" content="Rate Radar. A private deal workspace for creators. Agree terms, make confidential Solana Rings payments, and keep verified receipts." />
   <title>Rate Radar — Private creator deals</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -18,7 +18,7 @@
   <header class="site-header wrap">
     <a class="brand" href="#deals" aria-label="Rate Radar home"><img src="/assets/favicon.svg" alt="" width="32" height="32" />rate<span>radar</span></a>
     <nav class="desktop-nav" aria-label="Main navigation"><a href="#deals" data-nav="deals" aria-current="page">Deal desk <span>01</span></a><a href="#explore" data-nav="index">Rate index <span>02</span></a><a href="#studio" data-nav="studio">Receipts <span class="studio-dot" hidden></span></a></nav>
-    <div class="header-actions"><button class="preview-badge" data-action="methodology"><span></span> Demo edition</button><button class="button small dark" data-action="new-deal">New deal <span data-icon="plus"></span></button><button class="mobile-menu icon-button" aria-label="Open navigation" data-action="menu"><span data-icon="menu"></span></button></div>
+    <div class="header-actions"><button class="preview-badge network-badge" data-action="workspace-status"><span></span> Devnet</button><button class="button small outline wallet-button" id="wallet-button" data-action="connect-wallet">Connect wallet</button><button class="button small dark" data-action="new-deal">New deal <span data-icon="plus"></span></button><button class="mobile-menu icon-button" aria-label="Open navigation" data-action="menu"><span data-icon="menu"></span></button></div>
   </header>
   <main class="wrap">
     <section id="deals-page" class="deals-page" aria-labelledby="deals-title"></section>
@@ -37,7 +37,7 @@
         </div>
         <div class="market-heading"><div><span class="eyebrow">THE WIDER PICTURE</span><h2>Across the market.</h2></div><div><label class="search-control"><span data-icon="search"></span><input id="market-search" type="search" placeholder="Find a format" aria-label="Search market formats" /></label><button class="icon-button" data-action="export" aria-label="Download sample benchmarks as CSV" title="Download sample CSV"><span data-icon="download"></span></button></div></div>
         <div class="market-table-wrap"><table class="market-table"><caption class="sr-only">Fictional benchmark comparisons for the selected audience and market</caption><thead><tr><th scope="col">Deliverable</th><th scope="col">Typical range</th><th scope="col">Median</th><th scope="col">Receipts</th><th scope="col"><span class="sr-only">Explore</span></th></tr></thead><tbody id="market-rows"></tbody></table><div class="empty-state" id="market-empty" hidden>No matching formats.</div></div>
-        <p class="table-note">All rates and counts are fictional. This preview does not verify or move funds.</p>
+        <p class="table-note">Sample rates only. These fictional benchmarks are separate from your live deals and receipts.</p>
       </section>
     </div>
     <section id="studio-page" class="studio-page" aria-labelledby="studio-title" hidden></section>

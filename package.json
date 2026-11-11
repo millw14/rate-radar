@@ -1,11 +1,32 @@
 {
   "name": "rate-radar",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
     "dev": "node server.mjs",
-    "test": "node --test data.test.mjs deals.test.mjs"
+    "test": "node --test *.test.mjs",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node scripts/migrate-local.mjs",
+    "test:worker": "node scripts/verify-worker-crypto.mjs"
+  },
+  "dependencies": {
+    "@heliuslabs/spr": "0.9.0-alpha",
+    "@noble/curves": "2.2.0",
+    "@scure/base": "2.2.0",
+    "@solana/kit": "8.3.0",
+    "@wallet-standard/app": "1.1.1"
+  },
+  "devDependencies": {
+    "drizzle-kit": "0.31.10",
+    "drizzle-orm": "0.45.2",
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261110.0-beta",
+    "wrangler": "4.160.0"
+  },
+  "description": "Confidential sponsorship deals using Solana Privacy Rings",
+  "engines": {
+    "node": ">=24"
   }
 }

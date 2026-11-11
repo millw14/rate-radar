@@ -689,3 +689,56 @@ dialog::backdrop { background: #122e2460; }
 @media (max-width: 760px) {
   .detail-mobile-back { display: inline-flex; margin-bottom: 18px; padding-top: 0; color: var(--muted); }
 }
+
+/* Live workspace state is compact and explicit. */
+.workspace-notice { display: flex; align-items: center; gap: 17px; padding: 20px 23px; margin: 0 0 28px; border: 1px solid #ccd5bf; border-radius: 6px; background: #e9edde; }
+.workspace-notice > div { min-width: 0; flex: 1; }
+.workspace-notice strong { display: block; font-size: 14px; font-weight: 500; }
+.workspace-notice p { color: var(--muted); font-size: 12px; margin-top: 4px; line-height: 1.6; }
+.workspace-notice .receipt-icon { border: 1px solid #c8d2b8; background: transparent; }
+.workspace-notice .text-button { flex-shrink: 0; }
+.setup-notice { background: #eeece2; border-color: #dcd5c1; }
+.setup-notice .receipt-icon { border-color: #d3cbb6; }
+.wallet-address { overflow-wrap: anywhere; word-break: break-word; }
+.local-receipt strong.wallet-address { max-width: 68%; font-size: 12px; }
+.form-note { font-size: 12px; color: var(--muted); line-height: 1.65; margin-top: 19px; }
+.optional-label { display: inline; font-size: 11px; color: var(--muted); }
+.form-grid textarea { min-height: 90px; resize: vertical; }
+.approval-state { display: flex; align-items: center; gap: 20px; margin-top: 20px; font-size: 12px; color: var(--muted); }
+.approval-state > span { display: inline-flex; align-items: center; gap: 7px; }
+.approval-state svg { width: 14px; height: 14px; }
+.wallet-deposit { margin-top: 14px; width: 100%; justify-content: space-between; }
+.terms-notes { white-space: pre-wrap; max-width: 70%; }
+.deal-row-content > strong, .deal-detail h2, .studio-item strong { overflow-wrap: anywhere; }
+.detail-amount { flex-wrap: wrap; }
+.detail-amount > strong { max-width: 100%; }
+.dialog-body p.field-error { color: #9b382c; padding: 11px 13px; border: 1px solid #dab9aa; border-radius: 4px; background: #f5e8df; }
+[aria-busy='true'] { cursor: progress; }
+@media (max-width: 900px) {
+ .header-actions > [data-action='new-deal'] { display: none; }
+ .workspace-notice { gap: 13px; padding: 19px; }
+ .workspace-notice > .button { font-size: 12px; padding-inline: 14px; gap: 10px; }
+}
+@media (max-width: 700px) {
+ .wallet-button { max-width: 135px; overflow: hidden; text-overflow: ellipsis; }
+ .workspace-notice { flex-wrap: wrap; gap: 12px; padding: 17px; margin-bottom: 23px; }
+ .workspace-notice .receipt-icon { display: none; }
+ .workspace-notice > div { flex-basis: 100%; }
+ .workspace-notice > .button { min-height: 42px; margin-top: 3px; }
+ .workspace-notice > .text-button { padding: 2px 0; }
+ .workspace-notice strong { font-size: 14px; }
+ .workspace-notice p { font-size: 12px; }
+ .local-receipt strong.wallet-address { max-width: 62%; font-size: 11px; }
+ .deal-row-meta { max-width: 110px; }
+ .status-tag { white-space: normal; text-align: right; line-height: 1.4; }
+ .detail-amount > strong { font-size: clamp(32px, 11vw, 47px); overflow-wrap: anywhere; }
+ .approval-state { gap: 14px; font-size: 11px; }
+}
+@media (max-width: 370px) {
+ .header-actions > .wallet-button { font-size: 11px; padding-inline: 9px; max-width: 113px; }
+}
+
+@media (max-width: 700px) {
+  .deal-workspace:has(.deal-list > .empty-state) .detail-empty { display: none; }
+  .deal-list .empty-state { min-height: 130px; }
+}

@@ -1,4 +1,4 @@
-import { SAMPLE_DEALS, validDeal, createDealDesk } from './deals.mjs';
+import { createLiveDesk } from './live-desk.mjs';
 import { CATEGORIES, AUDIENCE_BRACKETS, REGIONS, DEFAULT_FILTERS, filterBenchmarks, findBenchmark, compareOffer, formatCurrency as money, benchmarksToCSV } from './data.mjs';
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -32,13 +32,11 @@ const icon = (name, className = '') => `<svg class="${className}" viewBox="0 0 2
 const hydrateIcons = (root = document) => $$('[data-icon]', root).forEach(el => { el.innerHTML = icon(el.dataset.icon); });
 const categoryIcons = ['x','youtube','newsletter','instagram'];
 const categoryLabels = ['X post / thread','YouTube integration','Newsletter placement','Instagram reel'];
-const storageKey = 'rate-radar-studio-v1';
+const storageKey = 'rate-radar-comparisons-v2';
 let stored = {};
 try { stored = JSON.parse(localStorage.getItem(storageKey) || '{}') || {}; } catch { /* Private mode and corrupt storage fall back to a clean session. */ }
 let state = {
   filters: { ...DEFAULT_FILTERS },
-  deals: Array.isArray(stored.deals) ? stored.deals.filter(validDeal).slice(0,100) : structuredClone(SAMPLE_DEALS),
-  receipts: Array.isArray(stored.receipts) ? stored.receipts.filter(r=>r && typeof r.id === 'string' && Number.isFinite(r.amount)).slice(0,100) : [],
   comparisons: Array.isArray(stored.comparisons) ? stored.comparisons.filter(c=>c && typeof c.id === 'string' && Number.isFinite(c.amount)).slice(0,100) : [],
   offer: null,
   query: '',
@@ -48,8 +46,8 @@ const params = new URLSearchParams(location.search);
 for (const [key, values] of Object.entries({category:CATEGORIES,audience:AUDIENCE_BRACKETS,region:REGIONS})) if (values.includes(params.get(key))) state.filters[key] = params.get(key);
 let toastTimer;
 function toast(message) { $('#toast').textContent = message; $('#toast').classList.add('visible'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),3500); }
-function persist() { try { localStorage.setItem(storageKey, JSON.stringify({filters:state.filters, receipts:state.receipts, comparisons:state.comparisons, deals:state.deals})); return true; } catch { toast('Browser storage is unavailable. Your changes last for this visit.'); return false; } }
-function syncStudioDot() { $('.studio-dot').hidden = !(state.receipts.length + state.comparisons.length); }
+function persist() { try { localStorage.setItem(storageKey, JSON.stringify({filters:state.filters, comparisons:state.comparisons})); return true; } catch { toast('Browser storage is unavailable. Your changes last for this visit.'); return false; } }
+function syncStudioDot() { $('.studio-dot').hidden = !(desk.receiptCount + state.comparisons.length); }
 const options = (values, selected) => values.map(value=>`<option value="${escape(value)}" ${value===selected?'selected':''}>${escape(value)}</option>`).join('');
 $('#audience-filter').innerHTML = options(AUDIENCE_BRACKETS, state.filters.audience);
 $('#region-filter').innerHTML = options(REGIONS, state.filters.region);
@@ -130,38 +128,16 @@ function closeDialog(){dialog.close();}
 dialog.addEventListener('close',()=>{if(dialogTrigger?.isConnected)dialogTrigger.focus({preventScroll:true});else if(dialogTriggerAction)$$('[data-action]').find(el=>el.dataset.action===dialogTriggerAction&&el.getClientRects().length)?.focus({preventScroll:true});});
 dialog.addEventListener('click',e=>{if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeDialog();}});
 function methodology(){
- openDialog('Clarity, without oversharing.','PRIVACY & METHODOLOGY',`<div class="methodology-lead"><p><strong>This is an interactive product preview.</strong> Every market rate, receipt count, and distribution is fictional. No payment has been verified, and no funds can move through this site.</p></div><details open><summary>What would make these benchmarks different?</summary><p>The proposed product uses settled confidential payments as evidence, instead of asking people to self-report a rate. Participants would prove facts about their payments without sending individual amounts to the benchmark operator.</p></details><details><summary>How does this preview calculate comparisons?</summary><p>Choose a format, audience bracket, and creator market. The median is the midpoint of a fictional cohort; the typical range is its 25th–75th percentile. Offer percentiles are approximated between summary quantiles. The chart is a conceptual illustration, not a measured histogram.</p><p>All deals assume one organic deliverable without paid usage or exclusivity. They are not quotes or observed market rates.</p></details><details><summary>What stays private with Solana Rings?</summary><p>Rings encrypts transfer assets, amounts, and balances within the default ring. Sender and recipient wallet addresses remain public. Deposits and withdrawals reveal their asset and amount.</p><p>Anonymous benchmark contributions, private aggregation, and proofs that bind a contribution to a settled payment require additional engineering. They are not provided by this preview.</p><p><a href="https://www.helius.dev/docs/privacy/concepts/encryption" target="_blank" rel="noopener noreferrer">Read Helius’s privacy guarantees ↗</a></p></details><details><summary>How would fake or identifiable data be handled?</summary><p>A payment proves that funds moved, not that a job was genuine. A production system needs independent-counterparty checks, jointly signed work context, duplicate prevention, minimum cohort sizes, batched publication, and protections against inferring a single person’s payment.</p></details><details><summary>What does this site save?</summary><p>Deal drafts (including counterparty names, terms and amounts), filters, saved comparisons, and demo receipts stay in this browser’s local storage. Nothing is sent to a payment or benchmark server. Use fictional information. Clear receipts and saved offers in the Receipts screen, or reset the entire workspace below.</p><p>The interface loads fonts from Google Fonts. Your browser contacts that service for the font files.</p><button class="text-button" data-action="reset-workspace">Reset entire demo workspace ↗</button></details>`,true);
-}
-
-let contribution={};
-let contributeStep=1;
-function stepTrack(step){return `<div class="step-track" aria-label="Step ${step} of 3">${[1,2,3].map(n=>`<span class="${n<=step?'active':''}"></span>`).join('')}</div>`;}
-function startContribution(){contribution={category:state.filters.category,audience:state.filters.audience,region:state.filters.region,amount:findBenchmark(state.filters).median};contributeStep=1;renderContribution();}
-function renderContribution(){
- if(contributeStep===1){
-  openDialog('Add a receipt.','CONTRIBUTE / 01',`${stepTrack(1)}<p class="dialog-intro">Choose a sample payment to try the contribution flow.</p><label class="receipt-choice"><input type="radio" name="sample-payment" checked /><span class="receipt-icon">${icon('receipt')}</span><div><strong>Sample sponsorship payment</strong><small>${money(contribution.amount)} USDC · Fictional receipt</small></div><span>${icon('check')}</span></label><div class="disclosure-box"><h3>${icon('info')} A safe space to explore</h3><p>Local demo only. No wallet, verification, or market submission.</p></div><div class="dialog-actions"><button class="button dark" data-action="contribute-next">Add work context ${icon('arrow-right')}</button></div>`);
- } else if(contributeStep===2){
-  openDialog('Add work context.','CONTRIBUTE / 02',`${stepTrack(2)}<p class="dialog-intro">Help compare like with like. Use fictional details for this preview.</p><form id="context-form"><div class="form-grid"><label>Deliverable<select name="category">${options(CATEGORIES,contribution.category)}</select></label><label>Audience size<select name="audience">${options(AUDIENCE_BRACKETS,contribution.audience)}</select></label><label>Creator market<select name="region">${options(REGIONS,contribution.region)}</select></label><label>Sample payment · USD<input name="amount" type="number" min="1" max="10000000" step="0.01" inputmode="decimal" value="${contribution.amount}" required /></label><label class="full">Usage rights<select name="usage"><option>Organic placement only</option></select><span class="field-hint">This first cohort excludes paid usage and exclusivity so comparisons stay meaningful.</span></label></div><div class="dialog-actions"><button type="button" class="button outline" data-action="contribute-back">Back</button><button class="button dark" type="submit">Preview contribution ${icon('arrow-right')}</button></div></form>`);
-  $('#context-form').addEventListener('submit',e=>{e.preventDefault();const f=new FormData(e.target);const amount=Number(f.get('amount'));if(!Number.isFinite(amount)||amount<=0||amount>10000000)return;contribution={...contribution,category:f.get('category'),audience:f.get('audience'),region:f.get('region'),amount};contributeStep=3;renderContribution();});
- } else {
-  openDialog('Review disclosure.','CONTRIBUTE / 03',`${stepTrack(3)}<p class="dialog-intro">Preview the disclosure. This demo stays on your device.</p><div class="disclosure-box"><h3>${icon('users')} Proposed aggregate context</h3><ul><li>${escape(contribution.category)}</li><li>${escape(contribution.audience)} audience · ${escape(contribution.region)}</li><li>Organic placement, no paid usage or exclusivity</li></ul></div><div class="disclosure-box private"><h3>${icon('lock')} Kept out of published benchmarks</h3><ul><li>Your individual payment amount</li><li>Your name and contract details</li><li>Your client’s identity and negotiated terms</li></ul></div><p style="font-size:10px;margin-top:13px">Default-ring wallet addresses remain public onchain. A live product would need additional safeguards to make benchmark submissions unlinkable.</p><label class="consent-label"><input type="checkbox" id="receipt-consent" />I understand this saves a fictional receipt in this browser. No payment proof is created or submitted.</label><div class="dialog-actions"><button class="button outline" data-action="contribute-back">Back</button><button class="button dark" data-action="confirm-contribution" id="confirm-contribution" disabled>Save demo receipt ${icon('check')}</button></div>`);
-  $('#receipt-consent').addEventListener('change',e=>$('#confirm-contribution').disabled=!e.target.checked);
- }
-}
-function confirmContribution(){
- if(!$('#receipt-consent')?.checked)return;
- const id=crypto.randomUUID();
- const receipt={...contribution,id,createdAt:new Date().toISOString(),synthetic:true};
- state.receipts.unshift(receipt);state.receipts=state.receipts.slice(0,100);const saved=persist();syncStudioDot();
- openDialog('Receipt saved.','DEMO RECEIPT SAVED',`<div class="success-view"><div class="success-mark">${icon('check')}</div><h3>Saved on this device.</h3><p>Your sample contribution is ${saved?'saved in My studio on this device':'available in My studio for this visit'}. It has not been sent to a network or added to real benchmarks.</p><div class="local-receipt"><div><span>Receipt</span><strong>RR–${id.slice(0,8).toUpperCase()}</strong></div><div><span>Deliverable</span><strong>${escape(receipt.category)}</strong></div><div><span>Sample amount</span><strong>${money(receipt.amount)}</strong></div><div><span>Status</span><strong>Demo · not cryptographically verified</strong></div></div><button class="button dark" data-action="studio">Open my studio ${icon('arrow-right')}</button></div>`);
+ openDialog('Clarity, without oversharing.','PRIVACY & METHODOLOGY',`<div class="methodology-lead"><p><strong>Real deal workflow. Devnet payments.</strong> Your workspace stores agreed terms and verifies settlement through Solana Rings. Devnet tokens have no monetary value.</p></div><details open><summary>Who can see my deal?</summary><p>The two linked wallets can access the deal through their signed-in workspace. Your terms and amounts are also processed by this application’s server. Onchain privacy does not hide them from this service.</p></details><details><summary>What does Rings keep private?</summary><p>Rings encrypts private-transfer assets, amounts, and balances. Sender and recipient wallet addresses remain public. Deposits and withdrawals reveal their asset and amount.</p><p>Settlement verification shares a transaction-scoped viewing key with the server. It can reveal other outputs in that transaction. Your full wallet viewing key and spending keys stay in your browser. Mainnet is not enabled.</p><p><a href="https://www.helius.dev/docs/privacy/concepts/encryption" target="_blank" rel="noopener noreferrer">Helius privacy guarantees ↗</a></p></details><details><summary>When is a deal paid?</summary><p>Both parties first sign the same version of the terms. A payment is marked paid only after the backend verifies its finalized transaction and checks the recipient, asset, amount, and payment intent.</p></details><details><summary>Are the rate benchmarks real?</summary><p>No. All rates, counts, and distributions in the Rate index are fictional sample data. Your payment receipts do not enter that index. Private aggregation and anonymous contributions are not implemented.</p></details><details><summary>What stays on my device?</summary><p>Sample offer comparisons and rate filters are saved in this browser. Real deals, signed approvals, and verified settlement records live in the authenticated backend. Wallet secrets are not saved by this application.</p><p>The interface loads fonts from Google Fonts.</p></details>`,true);
 }
 
 let studioView='receipts';
 function renderStudio(view=studioView){
  studioView=view;
- const isReceipts=view==='receipts';const items=isReceipts?state.receipts:state.comparisons;
- const content=items.length?items.map(item=>`<div class="studio-item"><span class="receipt-icon">${icon(isReceipts?'receipt':'bookmark')}</span><div><strong>${escape(item.category)} · ${money(item.amount)}</strong><small>${escape(item.audience)} · ${escape(item.region)} · ${isReceipts?'Demo receipt':'Sample comparison'}</small></div><button class="icon-button" data-action="remove-item" data-id="${escape(item.id)}" aria-label="Delete ${escape(item.category)} ${isReceipts?'receipt':'comparison'}">${icon('trash')}</button></div>`).join(''):`<div class="studio-empty"><span>${icon(isReceipts?'receipt':'bookmark')}</span><h3>${isReceipts?'A clean slate.':'Your next offer, in context.'}</h3><p>${isReceipts?'Demo receipts from your deals appear here.':'Saved rate comparisons appear here.'}</p><button class="button dark" data-action="${isReceipts?'contribute':'go-explore'}">${isReceipts?'Try sample receipt':'Explore rates'} ${icon('arrow-up-right')}</button></div>`;
- $('#studio-page').innerHTML=`<div class="dashboard-intro"><div><p class="eyebrow">YOUR PRIVATE RECORD</p><h1 id="studio-title">The <span class="serif">paperwork.</span></h1></div><div class="desk-meta"><span>ON THIS DEVICE</span><p>Receipts & saved comparisons.</p></div></div><div class="studio-surface"><div class="studio-tabs" role="tablist" aria-label="Studio views"><button role="tab" id="receipts-tab" aria-controls="studio-panel" tabindex="${isReceipts?'0':'-1'}" aria-selected="${isReceipts}" data-action="studio-receipts">Receipts <span>${state.receipts.length}</span></button><button role="tab" id="comparisons-tab" aria-controls="studio-panel" tabindex="${!isReceipts?'0':'-1'}" aria-selected="${!isReceipts}" data-action="studio-comparisons">Saved offers <span>${state.comparisons.length}</span></button></div><div role="tabpanel" id="studio-panel" aria-labelledby="${isReceipts?'receipts-tab':'comparisons-tab'}">${content}</div><div class="studio-bottom"><p>Local demo records. No onchain proofs.</p>${state.receipts.length+state.comparisons.length?'<button data-action="clear-studio">Clear these records</button>':''}</div></div>`;
+ const isReceipts=view==='receipts';
+ const comparisons=state.comparisons;
+ const content=isReceipts?desk.receiptsMarkup():comparisons.length?comparisons.map(item=>`<div class="studio-item"><span class="receipt-icon">${icon('bookmark')}</span><div><strong>${escape(item.category)} · ${money(item.amount)}</strong><small>${escape(item.audience)} · ${escape(item.region)} · Sample comparison</small></div><button class="icon-button" data-action="remove-comparison" data-id="${escape(item.id)}" aria-label="Delete saved comparison">${icon('trash')}</button></div>`).join(''):`<div class="studio-empty"><span>${icon('bookmark')}</span><h3>Your next offer, in context.</h3><p>Saved sample comparisons appear here.</p><button class="button dark" data-action="go-explore">Explore sample rates ${icon('arrow-up-right')}</button></div>`;
+ $('#studio-page').innerHTML=`<div class="dashboard-intro"><div><p class="eyebrow">YOUR PRIVATE RECORD · DEVNET</p><h1 id="studio-title">The <span class="serif">paperwork.</span></h1></div><div class="desk-meta"><span>VERIFIED SETTLEMENTS</span><p>Real records. Clear status.</p></div></div><div class="studio-surface"><div class="studio-tabs" role="tablist" aria-label="Studio views"><button role="tab" id="receipts-tab" aria-controls="studio-panel" tabindex="${isReceipts?'0':'-1'}" aria-selected="${isReceipts}" data-action="studio-receipts">Receipts <span>${desk.receiptCount}</span></button><button role="tab" id="comparisons-tab" aria-controls="studio-panel" tabindex="${!isReceipts?'0':'-1'}" aria-selected="${!isReceipts}" data-action="studio-comparisons">Sample offers <span>${comparisons.length}</span></button></div><div role="tabpanel" id="studio-panel" aria-labelledby="${isReceipts?'receipts-tab':'comparisons-tab'}">${content}</div><div class="studio-bottom"><p>${isReceipts?'Only backend-verified settlements appear here.':'Fictional benchmark comparisons saved on this device.'}</p>${!isReceipts&&comparisons.length?'<button data-action="clear-comparisons">Clear sample offers</button>':''}</div></div>`;
 }
 function openStudio(view=studioView){
  studioView=view;
@@ -169,44 +145,37 @@ function openStudio(view=studioView){
  if(location.hash!=='#studio')location.hash='studio';
  else {renderStudio();$('.studio-tabs [aria-selected="true"]')?.focus({preventScroll:true});}
 }
-
 function saveComparison(){
  if(!state.offer)return;
  const duplicate=state.comparisons.some(c=>c.amount===state.offer.amount&&c.category===state.filters.category&&c.audience===state.filters.audience&&c.region===state.filters.region);
- if(duplicate){toast('This comparison is already in My studio.');return;}
- state.comparisons.unshift({id:crypto.randomUUID(),...state.filters,amount:state.offer.amount,median:findBenchmark(state.filters).median,createdAt:new Date().toISOString(),synthetic:true});state.comparisons=state.comparisons.slice(0,100);const saved=persist();syncStudioDot();toast(saved?'Comparison saved to My studio on this device.':'Comparison available in My studio for this visit.');
+ if(duplicate){toast('This comparison is already saved.');return;}
+ state.comparisons.unshift({id:crypto.randomUUID(),...state.filters,amount:state.offer.amount,median:findBenchmark(state.filters).median,createdAt:new Date().toISOString(),synthetic:true});state.comparisons=state.comparisons.slice(0,100);const saved=persist();syncStudioDot();toast(saved?'Sample comparison saved on this device.':'Comparison available for this visit.');
 }
 function exportBenchmarks(){
- const csv=benchmarksToCSV(marketRows());const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='rate-radar-sample-benchmarks.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),5000);toast('Sample benchmarks exported. Every row is labeled synthetic.');
+ const csv=benchmarksToCSV(marketRows());const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='rate-radar-sample-benchmarks.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),5000);toast('Sample benchmarks exported.');
 }
 document.addEventListener('click',e=>{
  const target=e.target.closest('[data-action]');if(!target)return;
  const action=target.dataset.action;
  if(desk.handle(action,target))return;
- if(action==='category'||action==='select-category'){setFilter('category',target.dataset.category);if(action==='select-category')$('.benchmark-grid').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth',block:'center'});}
+ if(action==='category'||action==='select-category'){setFilter('category',target.dataset.category);if(action==='select-category')$('.benchmark-grid').scrollIntoView({block:'center'});}
  else if(action==='reset'){state.filters={...DEFAULT_FILTERS};state.query='';$('#market-search').value='';const url=new URL(location.href);for(const key of ['category','audience','region'])url.searchParams.delete(key);history.replaceState(null,'',url);persist();render();toast('Filters reset.');}
  else if(action==='methodology')methodology();
  else if(action==='close')closeDialog();
- else if(action==='contribute')startContribution();
- else if(action==='contribute-next'){contributeStep++;renderContribution();}
- else if(action==='contribute-back'){contributeStep--;renderContribution();}
- else if(action==='confirm-contribution')confirmContribution();
  else if(action==='studio')openStudio();
  else if(action==='studio-receipts')openStudio('receipts');
  else if(action==='studio-comparisons')openStudio('comparisons');
  else if(action==='save-comparison')saveComparison();
  else if(action==='export')exportBenchmarks();
- else if(action==='remove-item'){const key=studioView==='receipts'?'receipts':'comparisons';state[key]=state[key].filter(i=>i.id!==target.dataset.id);const saved=persist();syncStudioDot();openStudio();toast(saved?'Record removed.':'Removed for this visit. Browser storage could not be updated.');}
- else if(action==='clear-studio')openDialog('Clear your studio?','LOCAL DATA',`<p>This removes receipts and saved offers. Your deals stay on the desk.</p><div class="dialog-actions"><button class="button outline" data-action="studio">Keep my data</button><button class="button dark" data-action="confirm-clear">Clear records ${icon('trash')}</button></div>`);
- else if(action==='reset-workspace')openDialog('Start fresh?','RESET WORKSPACE',`<p>Delete your local drafts, receipts, saved offers and filters. The four fictional sample deals will be restored.</p><div class="dialog-actions"><button class="button outline" data-action="close">Keep workspace</button><button class="button dark" data-action="confirm-reset-workspace">Reset workspace ${icon('reset')}</button></div>`);
- else if(action==='confirm-reset-workspace'){state.deals=structuredClone(SAMPLE_DEALS);state.receipts=[];state.comparisons=[];state.filters={...DEFAULT_FILTERS};state.offer=null;state.query='';$('#market-search').value='';$('#offer-amount').value='';$('#offer-result').hidden=true;const url=new URL(location.href);url.search='';url.hash='deals';history.replaceState(null,'',url);const saved=persist();closeDialog();syncStudioDot();showRoute();toast(saved?'Local data cleared. Sample workspace restored.':'Workspace reset for this visit. Browser storage could not be updated.');}
- else if(action==='confirm-clear'){state.receipts=[];state.comparisons=[];const saved=persist();syncStudioDot();openStudio();toast(saved?'Records cleared.':'Cleared for this visit. Browser storage could not be updated.');}
+ else if(action==='remove-comparison'){state.comparisons=state.comparisons.filter(i=>i.id!==target.dataset.id);persist();syncStudioDot();renderStudio();toast('Sample comparison removed.');}
+ else if(action==='clear-comparisons')openDialog('Clear sample offers?','ON THIS DEVICE',`<p>This removes saved sample comparisons. Your real deals and receipts stay in your workspace.</p><div class="dialog-actions"><button class="button outline" data-action="close">Keep offers</button><button class="button dark" data-action="confirm-clear-comparisons">Clear sample offers ${icon('trash')}</button></div>`);
+ else if(action==='confirm-clear-comparisons'){state.comparisons=[];persist();syncStudioDot();openStudio('comparisons');toast('Sample offers cleared.');}
  else if(action==='go-explore'){if(dialog.open)closeDialog();location.hash='explore';}
- else if(action==='menu')openDialog('Workspace.','EXPLORE',`<nav class="menu-links" aria-label="Mobile navigation"><a href="#deals" data-action="close">Deal desk ↗</a><a href="#explore" data-action="close">Rate index ↗</a><button data-action="studio">Receipts ↗</button><button data-action="methodology">Privacy & methodology ↗</button></nav>`);
+ else if(action==='go-deals'){if(dialog.open)closeDialog();location.hash='deals';}
+ else if(action==='menu')openDialog('Workspace.','DEVNET',`<nav class="menu-links" aria-label="Mobile navigation"><a href="#deals" data-action="close">Deal desk ↗</a><a href="#explore" data-action="close">Sample rate index ↗</a><button data-action="studio">Receipts ↗</button><button data-action="connect-wallet">Wallet ↗</button><button data-action="methodology">Privacy & methodology ↗</button></nav>`);
 });
-// Arrow-key navigation for the two studio tabs follows the native tab convention.
-document.addEventListener('keydown',e=>{if(e.target.getAttribute('role')==='tab'&&['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();openStudio(studioView==='receipts'?'comparisons':'receipts');$('.studio-tabs [aria-selected="true"]').focus();}});
-const desk=createDealDesk({state,icon,escape,openDialog,toast,persist,categories:CATEGORIES,onReceipt:receipt=>{state.receipts.unshift(receipt);state.receipts=state.receipts.slice(0,100);syncStudioDot();}});
+document.addEventListener('keydown',e=>{if(e.target.getAttribute('role')==='tab'&&['ArrowLeft','ArrowRight'].includes(e.key)){e.preventDefault();openStudio(studioView==='receipts'?'comparisons':'receipts');$('.studio-tabs [aria-selected="true"]')?.focus();}});
+const desk=createLiveDesk({icon,escape,openDialog,closeDialog,toast,categories:CATEGORIES,onChange:()=>{syncStudioDot();if(location.hash==='#studio')renderStudio();}});
 function showRoute(){
  const route=location.hash==='#studio'?'studio':location.hash==='#explore'?'index':'deals';
  $('#deals-page').hidden=route!=='deals';$('#index-page').hidden=route!=='index';$('#studio-page').hidden=route!=='studio';
@@ -215,4 +184,4 @@ function showRoute(){
  window.scrollTo(0,0);
 }
 window.addEventListener('hashchange',showRoute);
-hydrateIcons();render();syncStudioDot();showRoute();
+hydrateIcons();render();showRoute();desk.init();

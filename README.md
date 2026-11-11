@@ -1,59 +1,94 @@
 # Rate Radar
 
-A browser-based prototype of a confidential sponsorship deal desk for Solana-native creators and brands. The rate index is a secondary benefit of the eventual private receipt network.
+A confidential sponsorship deal desk using **Helius Solana Privacy Rings**. Brands and creators sign the same agreement, pay from private USDC balances, and receive a server-verified settlement record.
 
-## Run
+[Hosted workspace](https://rate-radar-studio.early-clock-9525.chatgpt.site) · [Public source](https://github.com/millw14/rate-radar)
 
-Node 20+ is sufficient; the application has no runtime dependencies.
+## Status
+
+This release targets **Solana devnet only**. It contains a real Rings SDK integration, a Cloudflare Worker API, and a D1 database. There is no simulated payment action and no client-controlled paid status. A Helius API key, funded devnet wallets, version 1 wallet signing support, and a registered Rings asset are required for onchain execution. Mainnet is intentionally unsupported.
+
+The rate index remains an explicitly fictional dataset. Real receipts are not automatically contributed to it. Benchmark privacy proofs and aggregation are separate future work.
+
+## Local setup
+
+Requires Node.js 24 or newer and npm.
 
 ```sh
-npm run dev
-npm test
+npm ci
+cp .env.example .env.local
+# Fill HELIUS_API_KEY in .env.local.
+# Generate RECEIPT_ENCRYPTION_KEY with:
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
 npm run build
+npm run db:migrate
+npm run dev
 ```
 
-Local preview: http://127.0.0.1:4173/ . Static build: `dist/`.
+Open http://127.0.0.1:4173/. Local development emulates one Sites identity on loopback only; wallet challenge signatures are still verified. The two-party test suite uses separate identities. Never put a wallet seed, private key, or master viewing key in the server environment.
 
-## Working flows
+Runtime configuration:
 
-- `#deals`: filter and inspect demo deals; create local drafts; review terms; simulate approval and payment; export demo records.
-- `#explore`: filter 48 synthetic rate cohorts; compare offers; save comparisons; search formats; export labeled CSV. Filters also have shareable URL parameters.
-- `#studio`: view and delete demo receipts and saved comparisons.
-- Receipt contribution: choose a sample, add context, inspect disclosure, save locally.
+| Key | Purpose |
+| --- | --- |
+| `HELIUS_API_KEY` | Helius devnet RPC, indexer, and encrypted prover transport; server only |
+| `RECEIPT_ENCRYPTION_KEY` | Random 32-byte base64 AES-GCM key for pending transaction disclosures and signed transaction recovery |
+| `RINGS_NETWORK` | `devnet` |
+| `RINGS_USDC_MINT` | Circle devnet USDC: `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` |
+| `DB` | D1 binding provisioned by Sites |
 
-Records persist in this browser's local storage. They are not synced, signed, or submitted to a service. Google Fonts serves DM Sans and Instrument Serif; no account, wallet, analytics, or payment service is connected.
+The SDK checks the actual mint registry before deposits or payments. An unsupported mint is an error; there is no replacement with another token. Obtain test tokens from [Circle's faucet](https://faucet.circle.com/) and test SOL from [Solana's faucet](https://faucet.solana.com/). Neither test asset has monetary value.
 
-## Product boundary
+## How it works
 
-This is a design and interaction prototype. All included deals, rates, receipt counts, and payment states are fictional. Simulating a payment does not transfer USDC. A demo receipt is not a transaction proof, signature, attestation of delivery, or legally signed contract.
+1. Sign into the hosted workspace. Link a Wallet Standard Solana account with a short-lived, single-use message signature.
+2. Create a deal naming both wallets, amount, deliverable, usage, and due date. The parties sign the exact version and hash of those terms. Once signed, terms cannot be silently changed.
+3. Unlock Rings locally by signing its official privacy-role derivation message. Register the privacy identity if necessary and deposit test USDC. Deposits are public onchain.
+4. The payer requests an idempotent payment intent. The browser uses `@heliuslabs/spr@0.9.0-alpha` to select private inputs, encrypt the transfer and intent memo, request an attested encrypted proof, and build the transaction. The wallet signs it.
+5. **Before broadcast**, the backend durably stores the signed transaction and transaction-scoped disclosure in encrypted form. Recovery relays the same signed bytes and signature; it never constructs a second payment.
+6. The backend reads the finalized Solana transaction. It checks the exact Rings program and instruction, payer, recipient, mint, amount, encrypted intent memo, and UTXO commitment. Only matching evidence issues a receipt. Unknown outcomes remain pending.
 
-The eventual production flow is private terms → mutually approved agreement → confidential USDC payment through Helius Rings → a receipt linked to that settlement. Helius's default ring encrypts assets, amounts and balances but exposes sender and recipient addresses. Deposits and withdrawals expose more information. [Primary privacy documentation](https://www.helius.dev/docs/privacy/concepts/encryption).
+The SDK currently produces Solana transaction version 1. The interface checks the selected wallet's declared support; it does not assume that every wallet or wallet version supports it.
 
-Production work still required:
+## Privacy and trust
 
-- Wallet authentication and counterparty authorization, agreement versions, signatures, and recoverable drafts.
-- Live Rings SDK/RPC integration and transaction states; actual settlement confirmation before issuing a receipt.
-- A binding between the approved agreement and hidden payment; delivery approval remains a party's attestation.
-- Receipt duplicate/collusion controls and independent-counterparty checks.
-- Custom proofs and private aggregation for opt-in benchmarks, cohort suppression and inference protections.
-- Independent security review before handling real funds. Helius's example escrow programs are not deployable production code.
+Rings hides transfer assets and amounts onchain. Sender and recipient wallet addresses remain public; deposits and withdrawals expose amounts and assets. Deal terms and negotiated amounts are stored by this service and visible to both participants and its operator.
 
-## Design study
+For payment verification, the payer explicitly discloses a **transaction-scoped viewing key** to the server. It can reveal other outputs in that one transaction, including change. The app never sends its master viewing key or wallet private key to the backend. Pending disclosures use AES-GCM with intent-bound authenticated data. Verified or definitively rejected disclosures are removed; expired transactions requiring manual review retain their encrypted recovery record and permanent payment lock. Expiry never automatically creates a new payment.
 
-The revised UI prioritizes the workspace, concise labels, consistent controls and a static visual identity. It deliberately excludes autoplay artwork, scroll interception and decorative movement.
+The verifier trusts the configured Helius endpoint for finalized chain data. It does not trust a browser's claimed amount, a bare signature, or unanchored indexer plaintext. The decoder is deliberately pinned to the SDK's default confidential transfer format; unsupported formats fail closed. A receipt proves payment, not delivery, a person's legal identity, or the commercial authenticity of a deal.
 
-- [Jeton on Awwwards](https://www.awwwards.com/sites/jeton) and [Büro's app/web design case study](https://www.burocratik.com/work/jeton): consistent identity across marketing and task-focused app screens. Public sign-in was inspected; authenticated dashboards and private backend were not accessed.
-- [Linear's UI redesign](https://linear.app/now/how-we-redesigned-the-linear-ui): hierarchy, alignment and navigation density.
-- [Digital Curator on Awwwards](https://www.awwwards.com/sites/digital-curator): query-driven exploration and scoped detail views.
-- [Language Explorer's public dataset](https://github.com/google-research/url-nlp/tree/main/linguameta): explicit provenance and honest data coverage.
+## Hosting and access
 
-## Files
+`.openai/hosting.json` preserves this Site's identity and declares its D1 binding. The build emits `dist/client` and `dist/server/index.js`, plus the official Poseidon WASM module for the Worker runtime. Migrations live in `drizzle/`; append migrations rather than editing applied SQL.
 
-- `index.html`: static shell and rate workspace.
-- `app.mjs`: navigation, benchmark interactions, dialogs and local records.
-- `deals.mjs`: demo deal workflow and draft validation.
-- `data.mjs`: fictional cohort summaries and pure comparison functions.
-- `data.test.mjs`: quantile, validation, filtering and CSV tests.
-- `styles.css`: responsive design system; no animation.
+Sites supplies the trusted `oai-authenticated-user-id` identity header. Do not place this Worker directly behind an untrusted public origin that lets callers set that header. A different host must supply a real authenticated identity boundary before using these routes.
 
-Sites identity and static deployment configuration are in `.openai/hosting.json`.
+The GitHub repository is public. The hosted Site's existing owner-private access is preserved. A second participant needs access to the Site before the hosted two-party flow can be used. Public source does not change workspace sharing.
+
+## Validation
+
+```sh
+npm test
+npm run build
+npm run test:worker
+```
+
+Tests cover real Ed25519 challenge signatures, SQLite authorization and state transitions, immutable agreement versions, replay/idempotency, pending/failed payment handling, signed transaction recovery, confidential output decryption and commitment matching, and wallet transport boundaries. Worker verification checks the official Poseidon implementation against a known SDK output in the actual Workers runtime.
+
+Browser QA exercises wallet authentication, draft creation, signed approval, server persistence across reload, responsive layouts, and accessibility. Cryptographic fixtures exercise the actual SDK but are not a live network settlement. A live test needs the configured Helius key and funded compatible devnet wallets.
+
+## Main files
+
+- `backend.mjs` — authenticated API, agreements, payment checkpoints, RPC proxy, reconciliation.
+- `db/schema.ts`, `drizzle/` — D1 schema and migrations.
+- `rings-client.mjs` — local privacy roles, wallet signing, deposits and confidential transfers.
+- `rings-verifier.mjs` — finalized chain decoding and payment evidence checks.
+- `live-desk.mjs`, `app.mjs`, `styles.css` — deal desk, receipts, and fictional rate index.
+- `worker.mjs`, `build.mjs`, `scripts/` — Worker hosting, static assets, local setup and WASM support.
+
+## References
+
+- [Helius Rings SDK](https://www.helius.dev/docs/privacy/sdk), [endpoints](https://www.helius.dev/docs/privacy/endpoints), [wallet integration](https://www.helius.dev/docs/privacy/integration/wallet), [transfer guide](https://www.helius.dev/docs/privacy/guides/transfer).
+- [Solana transaction v1 compatibility](https://solana.com/upgrades/larger-transaction-sizes), [official devnet USDC example](https://solana.com/docs/payments/quickstart).
+- Design study: [Jeton on Awwwards](https://www.awwwards.com/sites/jeton), [Büro's Jeton app study](https://www.burocratik.com/work/jeton), [Linear's UI redesign](https://linear.app/now/how-we-redesigned-the-linear-ui), and [Digital Curator](https://www.awwwards.com/sites/digital-curator). The interface preserves quiet typography, concise labels, and static layouts.
