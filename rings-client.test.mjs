@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { getAddressDecoder, getTransactionDecoder, getTransactionEncoder, getSignatureFromTransaction, getBase58Decoder } from '@solana/kit';
-import { compileUnsignedTransaction, associatedTokenAddress } from '@heliuslabs/spr/internal';
-import { SHIELDED_POOL_PROGRAM_ID, InstructionTag, SPL_TOKEN_PROGRAM_ID } from '@heliuslabs/spr/interface';
-import { createRingsWallet, createProxyFetch, validateWithdrawalCheckpoint } from './rings-client.mjs';
+import { compileUnsignedTransaction, associatedTokenAddress, treeAddress, checkAuthorizedBinding } from '@heliuslabs/spr/internal';
+import { SHIELDED_POOL_PROGRAM_ID, InstructionTag, SPL_TOKEN_PROGRAM_ID, transactInstruction } from '@heliuslabs/spr/interface';
+import { Wallet, buildWithdrawalTransaction } from '@heliuslabs/spr';
+import { SigningKey, ShieldedKeypair, initializePoseidon } from '@heliuslabs/spr/keypair';
+import { Utxo, Data, ConfidentialTransfer, ProofInputUtxo, AssetRegistry, encryptConfidentialTransfer } from '@heliuslabs/spr/transaction';
+import { createRingsWallet, createProxyFetch, validateWithdrawalCheckpoint, prepareConnectedWithdrawal, isMemoOnlySpendable } from './rings-client.mjs';
 import { toBase64, fromBase64, SOL_MINT } from './rings-protocol.mjs';
 import { getNetworkConfig } from './rings-networks.mjs';
 
@@ -107,6 +110,59 @@ test('saved withdrawal validates the actual signed amount, recipient, owner, and
   const mint=getNetworkConfig().usdcMint,recipientToken=await associatedTokenAddress(owner,mint);
   await validateWithdrawalCheckpoint(withdrawalRecord({mint,recipientToken}),{owner,network:'devnet'});
   await assert.rejects(()=>validateWithdrawalCheckpoint(withdrawalRecord({mint,recipientToken:SOL_MINT}),{owner,network:'devnet'}),/token or recipient/);
+});
+
+test('a real SDK payment output with memo remains withdrawable to its owner without rewriting commitments',async()=>{
+  await initializePoseidon();
+  const sender=ShieldedKeypair.fromKeypair(SigningKey.fromEd25519Bytes(new Uint8Array(32).fill(5)));
+  const recipient=ShieldedKeypair.fromKeypair(SigningKey.fromEd25519Bytes(seed));
+  const identity=recipient.shieldedAddress(),asset=getNetworkConfig().usdcMint,tree=treeAddress(0);
+  const assets=new AssetRegistry();assets.insert(3n,asset);
+  const input=new Utxo({owner:sender.shieldedAddress().signingPublicKey,asset,amount:1000000n,blinding:new Uint8Array(32).fill(3)});
+  const payment=new ConfidentialTransfer(sender.shieldedAddress(),[ProofInputUtxo.fromKeypair(input,sender)],sender.shieldedAddress().solanaAddress());
+  payment.send(identity,asset,100000n);
+  const paymentPrepared=payment.prepare();
+  const memo=new TextEncoder().encode('Rate Radar: approved deal and payment intent');
+  const output=paymentPrepared.outputs[paymentPrepared.senderOutputCount].withMemo(memo);
+  const received=new Utxo({owner:identity.signingPublicKey,asset,amount:output.amount,blinding:output.blinding,data:output.data});
+  const receivedInput=ProofInputUtxo.fromKeypair(received,recipient);
+  const entry={utxo:received,outputContext:{hash:output.hash(0),tree,leafIndex:1n},nullifier:receivedInput.nullifier(),spent:false};
+  const wallet=new Wallet({identity,registry:assets});wallet._replace({utxos:[entry],transactions:[],nullifiers:new Set()});
+  assert.equal(received.data.isEmpty(),false);assert.equal(isMemoOnlySpendable(entry),true);
+  // Reproduce the pinned high-level SDK selector rejecting the receipt memo.
+  await assert.rejects(()=>buildWithdrawalTransaction({client:{},wallet,keys:{},feePayer:owner,recipient:owner,asset,amount:50000n}),error=>error.code==='WALLET_BUILD_WITHDRAWAL'&&error.causeCode==='WALLET_INSUFFICIENT_BALANCE');
+  const plan=await prepareConnectedWithdrawal({wallet,identity,owner,asset,amount:50000n,tree,treeId:0});
+  const selected=plan.prepared.inputs.find(value=>!value.isDummy());
+  assert.deepEqual(selected.hash(),entry.outputContext.hash);
+  assert.deepEqual(selected.nullifier(),entry.nullifier);
+  assert.equal(selected.utxo.amount,100000n);assert.deepEqual(selected.utxo.data.memo(),memo);
+  assert.equal(plan.intent.recipient,await associatedTokenAddress(owner,asset));
+  assert.equal(plan.withdrawal.recipientTokenAccount,plan.intent.recipient);
+  assert.equal(plan.withdrawal.mint,asset);
+  assert.equal(plan.prepared.interfaceTransfers[0].amount,50000n);
+  const key=recipient.transactionViewingKey(plan.prepared.firstNullifier);
+  try{
+    const proofInputs=plan.prepared.finalize(encryptConfidentialTransfer(key,{outputs:plan.prepared.outputs,assets}));
+    const mismatch=field=>new Error('Unexpected intent mismatch '+field);
+    checkAuthorizedBinding({proofInputs,owner:identity,senderOutputCount:plan.prepared.senderOutputCount,intent:plan.intent,withdrawal:plan.withdrawal},mismatch);
+    const external=proofInputs.externalData;
+    // This fixture tests actual SDK assembly and signatures; zero proof bytes
+    // are deliberately never submitted to a network.
+    const data={expiryUnixTs:external.expiryUnixTs,txViewingPk:external.txViewingPublicKey.toBytes(),salt:external.salt,interfaceTransfers:external.interfaceTransfers,outputs:external.outputs,messages:external.messages,privateTxHash:proofInputs.privateTxHash(),circuit:{kind:'confidentialSigner',inputs:proofInputs.inputUtxos.length,outputs:proofInputs.outputs.length,publicAssetSlots:1},proof:{a:new Uint8Array(32),b:new Uint8Array(128),c:new Uint8Array(32)},inputs:proofInputs.inputUtxos.map(input=>({nullifierHash:input.publishedNullifier(),treeIndex:0})),treeContexts:[{utxoTreeRootIndex:0,nullifierTreeRootIndex:0}]};
+    const instruction=await transactInstruction({payer:owner,ownerSigners:[owner],inputTree:tree,outputTree:tree,data,withdrawal:plan.withdrawal});
+    const unsigned=compileUnsignedTransaction({feePayer:owner,lifetime:{blockhash:getBase58Decoder().decode(new Uint8Array(32).fill(7)),lastValidBlockHeight:100n},computeUnitLimit:450000,setupInstructions:plan.setupInstructions,instructions:[instruction]});
+    const signed={...unsigned,signatures:{...unsigned.signatures,[owner]:ed25519.sign(unsigned.messageBytes,seed)}};
+    await validateWithdrawalCheckpoint({owner,recipient:owner,network:'devnet',mint:asset,amountAtomic:'50000',lastValidBlockHeight:'100',txSignature:getSignatureFromTransaction(signed),signedTransaction:toBase64(getTransactionEncoder().encode(signed))},{owner,network:'devnet'});
+  }finally{key.destroy();}
+  for(const kind of ['utxoData','ringData']){
+    const unsupported={...entry,utxo:new Utxo({...received,data:new Data([{kind,bytes:new Uint8Array([1])}])})};
+    assert.equal(isMemoOnlySpendable(unsupported),false,kind);
+    wallet._replace({utxos:[unsupported],transactions:[],nullifiers:new Set()});
+    await assert.rejects(()=>prepareConnectedWithdrawal({wallet,identity,owner,asset,amount:50000n,tree,treeId:0}),/balance is too low/);
+  }
+  for(const change of [{dataHash:new Uint8Array(32)},{ringDataHash:new Uint8Array(32)},{utxo:new Utxo({...received,ringProgramId:owner})},{spent:true}])assert.equal(isMemoOnlySpendable({...entry,...change}),false);
+  wallet._replace({utxos:[{...entry,utxo:new Utxo({...received,amount:100001n})}],transactions:[],nullifiers:new Set()});
+  await assert.rejects(()=>prepareConnectedWithdrawal({wallet,identity,owner,asset,amount:50000n,tree,treeId:0}),/onchain commitment/);
 });
 
 test('withdrawal recovery resends identical bytes without signing and locks new spends until finalized evidence',async()=>{

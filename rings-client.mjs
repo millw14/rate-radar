@@ -1,14 +1,14 @@
 import { getWallets } from '@wallet-standard/app';
 import {
   createSprClient, LocalKeys, Wallet, buildRegistrationTransaction,
-  buildDepositTransaction, buildWithdrawalTransaction, syncWallet, SHIELDED_POOL_PROGRAM_ID,
+  buildDepositTransaction, syncWallet, SHIELDED_POOL_PROGRAM_ID,
 } from '@heliuslabs/spr';
 import { SignedTeePolicy } from '@heliuslabs/spr/client';
 import { ed25519DerivationMessage } from '@heliuslabs/spr/keypair';
 import { resolveRegisteredAddress, fetchUserRecord } from '@heliuslabs/spr/wallet';
-import { ConfidentialTransfer, ProofInputUtxo, encryptConfidentialTransfer, approveIntent } from '@heliuslabs/spr/transaction';
+import { ConfidentialTransfer, ProofInputUtxo, encryptConfidentialTransfer } from '@heliuslabs/spr/transaction';
 import { transactInstruction, InstructionTag, ASSOCIATED_TOKEN_PROGRAM_ID, SPL_TOKEN_PROGRAM_ID } from '@heliuslabs/spr/interface';
-import { compileUnsignedTransaction, splAssetRegistryAddress, decodeSplAssetRegistryAccount, associatedTokenAddress, Reader } from '@heliuslabs/spr/internal';
+import { compileUnsignedTransaction, splAssetRegistryAddress, decodeSplAssetRegistryAccount, associatedTokenAddress, Reader, resolveWithdrawalSettlement, withdrawalSetupInstructions, reservedUtxoKeys, unreserved, checkPreparedTransfer, checkAuthorizedBinding, checkTransactData } from '@heliuslabs/spr/internal';
 import { address, getAddressEncoder, getTransactionEncoder, getTransactionDecoder, getSignatureFromTransaction, getCompiledTransactionMessageDecoder } from '@solana/kit';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { RINGS_NETWORK, SOL_MINT, amountAtomic, paymentMemo, equalBytes, toBase64, fromBase64 } from './rings-protocol.mjs';
@@ -20,6 +20,37 @@ const rpcSlot = value => typeof value === 'bigint' && value >= 0n && value <= 0x
 const slotAtLeast = (value, floor) => rpcSlot(value) !== null && rpcSlot(value) >= floor;
 const transactionError = value => (typeof value === 'string' && value.length > 0)
   || (value !== null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0);
+const withdrawalMismatch = field => new Error(`The withdrawal does not match the reviewed ${field}.`);
+export const isMemoOnlySpendable = entry => !entry.spent && entry.utxo.ringProgramId === undefined
+  && entry.dataHash === undefined && entry.ringDataHash === undefined
+  && entry.utxo.data.records().every(record => record.kind === 'memo');
+
+/** Pinned SDK 0.9's high-level selector excludes even non-committing memos. */
+export async function prepareConnectedWithdrawal({ wallet, identity, owner, asset, amount, tree, treeId }) {
+  if (identity.solanaAddress() !== owner) throw withdrawalMismatch('wallet');
+  const available = unreserved(reservedUtxoKeys(wallet));
+  const eligible = wallet.utxos().filter(entry => isMemoOnlySpendable(entry) && entry.utxo.asset === asset && entry.utxo.amount > 0n
+    && entry.outputContext.tree === tree && available(entry))
+    .sort((a,b) => a.utxo.amount === b.utxo.amount ? 0 : a.utxo.amount > b.utxo.amount ? -1 : 1);
+  const selected=[];let total=0n;
+  for(const entry of eligible){if(total>=amount)break;selected.push(entry);total+=entry.utxo.amount;}
+  if(total<amount)throw new Error('Your available private balance is too low for this withdrawal. Refresh the balance before retrying.');
+  if(selected.length>40)throw new Error('This balance needs a Rings wallet merge before withdrawing.');
+  const inputs=selected.map(entry=>{
+    // Keep the actual UTXO and its memo intact. Neither commitments, nullifiers,
+    // ownership, nor custom/ring semantics are rewritten to satisfy selection.
+    const input=new ProofInputUtxo({utxo:entry.utxo,nullifierPublicKey:identity.nullifierPublicKey,nullifier:entry.nullifier,treeId});
+    if(!equalBytes(input.hash(),entry.outputContext.hash))throw new Error('A withdrawal input does not match its onchain commitment. Refresh the wallet before retrying.');
+    return input;
+  });
+  const resolved=await resolveWithdrawalSettlement(owner,asset);
+  const transfer=new ConfidentialTransfer(identity,inputs,owner);
+  transfer.withdraw(asset,amount,resolved.target);
+  const prepared=transfer.prepare();
+  const intent={kind:'withdrawal',asset,amount,recipient:asset===SOL_MINT?owner:await associatedTokenAddress(owner,asset)};
+  checkPreparedTransfer(prepared,intent,withdrawalMismatch);
+  return {prepared,intent,withdrawal:resolved.accounts,setupInstructions:await withdrawalSetupInstructions({payer:owner,recipient:owner,asset})};
+}
 
 export async function validateWithdrawalCheckpoint(record, { owner, network }) {
   getNetworkConfig(network);
@@ -278,14 +309,18 @@ export function createRingsWallet({ provider = detectWalletProvider(), rpcProxy 
         requireNoPendingWithdrawal();
         await requireUnlocked();
         const rpc = await service(), asset = await assetSupported(mint), amount = amountAtomic(value);
-        const settlementRecipient = asset === SOL_MINT ? owner : await associatedTokenAddress(owner, asset);
         await syncWallet({ client: rpc, keys, wallet });
-        const unsigned = await buildWithdrawalTransaction({ client: rpc, wallet, keys, feePayer: owner, recipient: owner, asset, amount,
-          approve: async ({ intent }) => {
-            if (intent.kind !== 'withdrawal' || intent.recipient !== settlementRecipient || intent.asset !== asset || intent.amount !== amount) throw new Error('The withdrawal does not match the reviewed amount and wallet.');
-            return approveIntent(intent);
-          },
-        });
+        const {prepared,intent,withdrawal,setupInstructions}=await prepareConnectedWithdrawal({wallet,identity:keys.address(),owner,asset,amount,tree:rpc.tree,treeId:rpc.treeId});
+        const [txKey]=await keys.transactionKeys([{viewingPublicKey:keys.address().viewingPublicKey,firstNullifier:prepared.firstNullifier}]);
+        let unsigned;
+        try{
+          const proofInputs=prepared.finalize(encryptConfidentialTransfer(txKey,{outputs:prepared.outputs,assets:wallet.registry}));
+          checkAuthorizedBinding({proofInputs,owner:keys.address(),senderOutputCount:prepared.senderOutputCount,intent,withdrawal},withdrawalMismatch);
+          const data=await rpc.proveTransact(proofInputs,keys);
+          checkTransactData(data,intent,withdrawalMismatch);
+          const instruction=await transactInstruction({payer:owner,ownerSigners:[owner],inputTree:rpc.tree,outputTree:rpc.tree,data,withdrawal});
+          unsigned=compileUnsignedTransaction({feePayer:owner,lifetime:await rpc.getLatestBlockhash(),setupInstructions,instructions:[instruction],computeUnitLimit:450_000});
+        }finally{txKey.destroy();}
         let saved;
         await submit(unsigned, { beforeBroadcast: async signed => {
           saved = { ...signed, network, owner, recipient: owner, mint: asset, amountAtomic: amount.toString() };
@@ -317,7 +352,7 @@ export function createRingsWallet({ provider = detectWalletProvider(), rpcProxy 
         if (!recipient) throw new Error('The recipient must register a private Rings wallet before receiving this payment.');
         await syncWallet({ client: rpc, keys, wallet });
         const amount = amountAtomic(intent.amountAtomic);
-        const eligible = wallet.utxos().filter((entry) => !entry.spent && entry.utxo.asset === asset && !entry.utxo.ringProgramId && !entry.dataHash && !entry.ringDataHash && entry.outputContext.tree === rpc.tree).sort((a, b) => a.utxo.amount === b.utxo.amount ? 0 : a.utxo.amount > b.utxo.amount ? -1 : 1);
+        const eligible = wallet.utxos().filter((entry) => isMemoOnlySpendable(entry) && entry.utxo.asset === asset && entry.outputContext.tree === rpc.tree).sort((a, b) => a.utxo.amount === b.utxo.amount ? 0 : a.utxo.amount > b.utxo.amount ? -1 : 1);
         const selected = [];
         let total = 0n;
         for (const entry of eligible) { if (total >= amount) break; selected.push(entry); total += entry.utxo.amount; }
