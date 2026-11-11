@@ -6,7 +6,7 @@ A confidential sponsorship deal desk using **Helius Solana Privacy Rings**. Bran
 
 ## Status
 
-This release is a **mainnet pilot capped at 100 USDC per payment**. The funded end-to-end devnet gate passed on November 11, 2026: a 1 test-USDC deposit, 0.05 test-USDC confidential payment with a server-verified finalized receipt, and recipient withdrawal all finalized. Deployment activation and the post-activation read-only mainnet check are in progress; no successful mainnet check or real mainnet transfer is claimed yet. See the [release verification record](docs/release-verification.md).
+Production runs on **Solana mainnet, capped at 100 USDC per payment**. The funded end-to-end devnet gate passed on November 11, 2026: a 1 test-USDC deposit, 0.05 test-USDC confidential payment with a server-verified finalized receipt, and recipient withdrawal all finalized. Post-activation checks passed for wallet sessions, database persistence, mainnet USDC registration, prover attestation, and scheduled reconciliation. No real mainnet transfer was sent during verification. See the [release verification record](docs/release-verification.md).
 
 Vercel uses Node.js Functions, Turso SQLite, and wallet sessions. The original Sites host uses a Cloudflare Worker and D1. There is no simulated payment action and no client-controlled paid status. Onchain execution requires a Helius API key, funded wallets, version 1 wallet signing support, and a registered Rings asset. This application has not received an independent external security audit.
 

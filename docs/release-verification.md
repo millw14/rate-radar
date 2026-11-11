@@ -1,6 +1,6 @@
 # Mainnet pilot verification
 
-Release date: November 11, 2026. Mainnet pilot limit: **100 USDC per payment**. The funded devnet release gate is complete; mainnet activation and post-activation read-only verification are in progress.
+Release date: November 11, 2026. Mainnet pilot limit: **100 USDC per payment**. The funded devnet release gate, mainnet activation, and post-activation verification are complete.
 
 ## Funded devnet evidence
 
@@ -16,11 +16,13 @@ The deployed server issued a verified payment receipt after checking finalized c
 
 After withdrawal, the recipient's private balance was zero and its public USDC balance had increased by 0.05. Deposit and payment retries reused the original journaled transactions; no duplicate payments were made.
 
-The funded run uncovered and resolved three release blockers: the backend's decoding of actual SDK version 1 transaction headers; conservative withdrawal expiry and recovery checks; and spending received outputs carrying an encrypted memo without changing their commitments or stripping the memo. Regression coverage is included in the **107 passing tests**.
+Release verification uncovered and resolved three blockers: the backend's decoding of actual SDK version 1 transaction headers; conservative withdrawal expiry and recovery checks; and spending received outputs carrying an encrypted memo without changing their commitments or stripping the memo. Regression coverage is included in the **107 passing tests**.
 
 ## Mainnet verification and limits
 
-The post-activation check is **pending**. Its scope is read-only chain access through the authenticated production proxy, plus ephemeral wallet login, unsigned draft creation/deletion, and session revocation. It will check the full mainnet genesis hash, canonical USDC registry, signed prover attestation, and 136 pinned proving keys. It will not sign a transaction, request a proof, deposit, approve an agreement, or broadcast a payment.
+Post-activation verification **passed** on the public production domain. It covered ephemeral wallet login, secure HttpOnly sessions, unsigned draft persistence and cleanup, and logout revocation. Read-only checks through the authenticated production proxy verified the full mainnet genesis hash, canonical USDC registry, signed prover attestation, and all 136 pinned proving keys. The live interface displayed Mainnet. The reconciliation endpoint rejected unauthenticated requests and accepted the server credential with no errors or pending payments.
+
+These checks did not sign a transaction, request a proof, deposit, approve an agreement, or broadcast a payment. The temporary unsigned draft and active session were removed.
 
 No real mainnet transfer has been tested. The application has not received an independent external security audit. Devnet settlement and automated tests establish the tested flows, not an assurance that every production failure mode has been covered.
 
