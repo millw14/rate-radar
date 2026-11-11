@@ -2,7 +2,7 @@
 
 A confidential sponsorship deal desk using **Helius Solana Privacy Rings**. Brands and creators sign the same agreement, pay from private USDC balances, and receive a server-verified settlement record.
 
-[Hosted workspace](https://rate-radar-studio.early-clock-9525.chatgpt.site) · [Public source](https://github.com/millw14/rate-radar)
+[Vercel workspace](https://rate-radar-three.vercel.app) · [Public source](https://github.com/millw14/rate-radar)
 
 ## Status
 
