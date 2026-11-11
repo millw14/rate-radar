@@ -139,7 +139,7 @@ RATE_RADAR_URL=http://127.0.0.1:4174 npm run check:live
 
 The funded devnet test completed on November 11, 2026. Deposit and payment retries reused their saved transaction records without duplicate payments. After withdrawal, the recipient's private balance returned to zero and its public USDC balance increased by 0.05. [Finalized transaction evidence and remaining limits](docs/release-verification.md).
 
-Post-activation mainnet verification is read-only: wallet login, unsigned draft cleanup, canonical genesis and USDC registry checks, prover attestation, and 136 key pins. Its result is pending. No real mainnet transfer has been tested, and the application has not received an independent external audit.
+Post-activation mainnet checks passed: wallet login, unsigned draft persistence and cleanup, canonical genesis and USDC registry checks, prover attestation, 136 key pins, and reconciliation authentication. No real mainnet transfer was sent, and the application has not received an independent external audit.
 
 ## Main files
 

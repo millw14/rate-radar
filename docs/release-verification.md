@@ -27,3 +27,5 @@ These checks did not sign a transaction, request a proof, deposit, approve an ag
 No real mainnet transfer has been tested. The application has not received an independent external security audit. Devnet settlement and automated tests establish the tested flows, not an assurance that every production failure mode has been covered.
 
 Mainnet uses a separate database, an explicit payment cap, and a pause control that preserves saved-payment reconciliation and withdrawals. Pending-payment recovery retains the original signed transaction. Database recovery must preserve payment locks and the separately stored disclosure-encryption key; see the [backup and recovery runbook](backup-recovery.md).
+
+Devnet and mainnet snapshots both passed local restore, row-count, foreign-key, and integrity checks. These are local recovery artifacts; an offsite backup schedule is not configured by this release.
