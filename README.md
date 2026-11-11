@@ -6,7 +6,7 @@ A confidential sponsorship deal desk using **Helius Solana Privacy Rings**. Bran
 
 ## Status
 
-The deployed app is on **Solana devnet**. The current code supports allowlisted devnet and mainnet configurations, but **mainnet is not activated**. Funded end-to-end devnet testing is in progress; the release gate is a real deposit, confidential payment, server-verified finalized receipt, and withdrawal with recovery checked. Connectivity and fixture tests alone do not satisfy that gate.
+This release is a **mainnet pilot capped at 100 USDC per payment**. The funded end-to-end devnet gate passed on November 11, 2026: a 1 test-USDC deposit, 0.05 test-USDC confidential payment with a server-verified finalized receipt, and recipient withdrawal all finalized. Deployment activation and the post-activation read-only mainnet check are in progress; no successful mainnet check or real mainnet transfer is claimed yet. See the [release verification record](docs/release-verification.md).
 
 Vercel uses Node.js Functions, Turso SQLite, and wallet sessions. The original Sites host uses a Cloudflare Worker and D1. There is no simulated payment action and no client-controlled paid status. Onchain execution requires a Helius API key, funded wallets, version 1 wallet signing support, and a registered Rings asset. This application has not received an independent external security audit.
 
@@ -125,6 +125,8 @@ npm run test:worker
 
 Tests cover real Ed25519 challenge signatures, SQLite authorization and state transitions, immutable agreement versions, replay/idempotency, actual SDK version 1 signed transaction checkpoints, confidential output decryption and commitment matching, cluster isolation, payment caps and pauses, cron authentication and leases, persistent withdrawal recovery, and database backup/restore. Worker verification checks the official Poseidon implementation against a known SDK output in the actual Workers runtime.
 
+The release test run passed **107 tests**. These tests supplement the funded devnet evidence; they do not constitute an independent security audit.
+
 Browser QA exercises wallet authentication, draft creation, signed approval, server persistence across reload, responsive layouts, and accessibility. The Vercel session flow also passes real browser → API → libSQL login, HttpOnly cookie persistence, agreement signing, and logout revocation; this local integration test uses an isolated SQLite database. Cryptographic fixtures exercise the actual SDK but are not a live network settlement.
 
 Live checks on November 11, 2026 verified the app's Worker proxy against Solana devnet, browser privacy-key unlock, Circle USDC's Rings registry (asset ID 59), signed prover attestation, and all 136 published proving-key pins. Repeat these read-only checks after configuring the server and connecting a wallet in the local app:
@@ -135,7 +137,9 @@ npm run check:live
 RATE_RADAR_URL=http://127.0.0.1:4174 npm run check:live
 ```
 
-Funded end-to-end devnet testing is currently in progress. Record the resulting finalized deposit, payment receipt, and withdrawal evidence before changing the deployed network. Mainnet support in source and successful read-only service checks do not establish mainnet payment readiness.
+The funded devnet test completed on November 11, 2026. Deposit and payment retries reused their saved transaction records without duplicate payments. After withdrawal, the recipient's private balance returned to zero and its public USDC balance increased by 0.05. [Finalized transaction evidence and remaining limits](docs/release-verification.md).
+
+Post-activation mainnet verification is read-only: wallet login, unsigned draft cleanup, canonical genesis and USDC registry checks, prover attestation, and 136 key pins. Its result is pending. No real mainnet transfer has been tested, and the application has not received an independent external audit.
 
 ## Main files
 
